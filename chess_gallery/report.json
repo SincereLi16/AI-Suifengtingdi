@@ -1,0 +1,2870 @@
+{
+  "input_dir": "GameAssist_preprocessed_200;新增英雄",
+  "output_dir": "chess_gallery",
+  "circle_diameter": 84,
+  "samples": [
+    [
+      0,
+      40
+    ],
+    [
+      0,
+      60
+    ],
+    [
+      0,
+      80
+    ],
+    [
+      -14,
+      60
+    ],
+    [
+      14,
+      60
+    ]
+  ],
+  "alpha_tight": true,
+  "alpha_thresh": 18,
+  "threshold": 0.65,
+  "scales": [
+    0.6,
+    0.8,
+    1.0,
+    1.2,
+    1.4
+  ],
+  "nms_iou": 0.35,
+  "total_images": 113,
+  "ok_images": 113,
+  "no_bar": 0,
+  "multi_bar": 8,
+  "saved_crops": 565,
+  "items": [
+    {
+      "src": "丽桑卓.png",
+      "dst": "images/丽桑卓__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "丽桑卓.png",
+      "dst": "images/丽桑卓__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "丽桑卓.png",
+      "dst": "images/丽桑卓__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "丽桑卓.png",
+      "dst": "images/丽桑卓__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "丽桑卓.png",
+      "dst": "images/丽桑卓__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "乐芙兰.png",
+      "dst": "images/乐芙兰__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "乐芙兰.png",
+      "dst": "images/乐芙兰__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "乐芙兰.png",
+      "dst": "images/乐芙兰__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "乐芙兰.png",
+      "dst": "images/乐芙兰__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "乐芙兰.png",
+      "dst": "images/乐芙兰__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚托克斯.png",
+      "dst": "images/亚托克斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚托克斯.png",
+      "dst": "images/亚托克斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚托克斯.png",
+      "dst": "images/亚托克斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚托克斯.png",
+      "dst": "images/亚托克斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚托克斯.png",
+      "dst": "images/亚托克斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚索.png",
+      "dst": "images/亚索__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚索.png",
+      "dst": "images/亚索__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚索.png",
+      "dst": "images/亚索__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚索.png",
+      "dst": "images/亚索__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "亚索.png",
+      "dst": "images/亚索__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊.png",
+      "dst": "images/佐伊__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊.png",
+      "dst": "images/佐伊__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊.png",
+      "dst": "images/佐伊__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊.png",
+      "dst": "images/佐伊__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊.png",
+      "dst": "images/佐伊__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊2.png",
+      "dst": "images/佐伊2__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊2.png",
+      "dst": "images/佐伊2__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊2.png",
+      "dst": "images/佐伊2__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊2.png",
+      "dst": "images/佐伊2__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊2.png",
+      "dst": "images/佐伊2__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊3.png",
+      "dst": "images/佐伊3__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊3.png",
+      "dst": "images/佐伊3__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊3.png",
+      "dst": "images/佐伊3__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊3.png",
+      "dst": "images/佐伊3__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊3.png",
+      "dst": "images/佐伊3__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊4.png",
+      "dst": "images/佐伊4__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊4.png",
+      "dst": "images/佐伊4__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊4.png",
+      "dst": "images/佐伊4__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊4.png",
+      "dst": "images/佐伊4__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佐伊4.png",
+      "dst": "images/佐伊4__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佛耶戈.png",
+      "dst": "images/佛耶戈__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "佛耶戈.png",
+      "dst": "images/佛耶戈__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佛耶戈.png",
+      "dst": "images/佛耶戈__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "佛耶戈.png",
+      "dst": "images/佛耶戈__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "佛耶戈.png",
+      "dst": "images/佛耶戈__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "俄洛伊.png",
+      "dst": "images/俄洛伊__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "俄洛伊.png",
+      "dst": "images/俄洛伊__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "俄洛伊.png",
+      "dst": "images/俄洛伊__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "俄洛伊.png",
+      "dst": "images/俄洛伊__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "俄洛伊.png",
+      "dst": "images/俄洛伊__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "克格莫.png",
+      "dst": "images/克格莫__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "克格莫.png",
+      "dst": "images/克格莫__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "克格莫.png",
+      "dst": "images/克格莫__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "克格莫.png",
+      "dst": "images/克格莫__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "克格莫.png",
+      "dst": "images/克格莫__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "兰博.png",
+      "dst": "images/兰博__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "兰博.png",
+      "dst": "images/兰博__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "兰博.png",
+      "dst": "images/兰博__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "兰博.png",
+      "dst": "images/兰博__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "兰博.png",
+      "dst": "images/兰博__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "内瑟斯.png",
+      "dst": "images/内瑟斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "内瑟斯.png",
+      "dst": "images/内瑟斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "内瑟斯.png",
+      "dst": "images/内瑟斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "内瑟斯.png",
+      "dst": "images/内瑟斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "内瑟斯.png",
+      "dst": "images/内瑟斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯南.png",
+      "dst": "images/凯南__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯南.png",
+      "dst": "images/凯南__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯南.png",
+      "dst": "images/凯南__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯南.png",
+      "dst": "images/凯南__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯南.png",
+      "dst": "images/凯南__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯特琳.png",
+      "dst": "images/凯特琳__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯特琳.png",
+      "dst": "images/凯特琳__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯特琳.png",
+      "dst": "images/凯特琳__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯特琳.png",
+      "dst": "images/凯特琳__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "凯特琳.png",
+      "dst": "images/凯特琳__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "千珏.png",
+      "dst": "images/千珏__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "千珏.png",
+      "dst": "images/千珏__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "千珏.png",
+      "dst": "images/千珏__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "千珏.png",
+      "dst": "images/千珏__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "千珏.png",
+      "dst": "images/千珏__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卑尔维斯.png",
+      "dst": "images/卑尔维斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "卑尔维斯.png",
+      "dst": "images/卑尔维斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卑尔维斯.png",
+      "dst": "images/卑尔维斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "卑尔维斯.png",
+      "dst": "images/卑尔维斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卑尔维斯.png",
+      "dst": "images/卑尔维斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莉丝塔.png",
+      "dst": "images/卡莉丝塔__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莉丝塔.png",
+      "dst": "images/卡莉丝塔__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莉丝塔.png",
+      "dst": "images/卡莉丝塔__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莉丝塔.png",
+      "dst": "images/卡莉丝塔__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莉丝塔.png",
+      "dst": "images/卡莉丝塔__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莎.png",
+      "dst": "images/卡莎__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莎.png",
+      "dst": "images/卡莎__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莎.png",
+      "dst": "images/卡莎__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莎.png",
+      "dst": "images/卡莎__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卡莎.png",
+      "dst": "images/卡莎__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卢锡安与赛娜.png",
+      "dst": "images/卢锡安与赛娜__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "卢锡安与赛娜.png",
+      "dst": "images/卢锡安与赛娜__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卢锡安与赛娜.png",
+      "dst": "images/卢锡安与赛娜__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "卢锡安与赛娜.png",
+      "dst": "images/卢锡安与赛娜__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "卢锡安与赛娜.png",
+      "dst": "images/卢锡安与赛娜__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄斐琉斯.png",
+      "dst": "images/厄斐琉斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄斐琉斯.png",
+      "dst": "images/厄斐琉斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄斐琉斯.png",
+      "dst": "images/厄斐琉斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄斐琉斯.png",
+      "dst": "images/厄斐琉斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄斐琉斯.png",
+      "dst": "images/厄斐琉斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄运小姐.png",
+      "dst": "images/厄运小姐__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄运小姐.png",
+      "dst": "images/厄运小姐__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄运小姐.png",
+      "dst": "images/厄运小姐__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄运小姐.png",
+      "dst": "images/厄运小姐__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "厄运小姐.png",
+      "dst": "images/厄运小姐__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "可酷伯与悠米.png",
+      "dst": "images/可酷伯与悠米__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "可酷伯与悠米.png",
+      "dst": "images/可酷伯与悠米__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "可酷伯与悠米.png",
+      "dst": "images/可酷伯与悠米__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "可酷伯与悠米.png",
+      "dst": "images/可酷伯与悠米__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "可酷伯与悠米.png",
+      "dst": "images/可酷伯与悠米__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "吉格斯.png",
+      "dst": "images/吉格斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "吉格斯.png",
+      "dst": "images/吉格斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "吉格斯.png",
+      "dst": "images/吉格斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "吉格斯.png",
+      "dst": "images/吉格斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "吉格斯.png",
+      "dst": "images/吉格斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "嘉文四世.png",
+      "dst": "images/嘉文四世__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "嘉文四世.png",
+      "dst": "images/嘉文四世__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "嘉文四世.png",
+      "dst": "images/嘉文四世__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "嘉文四世.png",
+      "dst": "images/嘉文四世__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "嘉文四世.png",
+      "dst": "images/嘉文四世__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "基兰.png",
+      "dst": "images/基兰__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "基兰.png",
+      "dst": "images/基兰__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "基兰.png",
+      "dst": "images/基兰__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "基兰.png",
+      "dst": "images/基兰__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "基兰.png",
+      "dst": "images/基兰__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆.png",
+      "dst": "images/塔姆__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆.png",
+      "dst": "images/塔姆__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆.png",
+      "dst": "images/塔姆__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆.png",
+      "dst": "images/塔姆__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆.png",
+      "dst": "images/塔姆__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆2.png",
+      "dst": "images/塔姆2__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆2.png",
+      "dst": "images/塔姆2__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆2.png",
+      "dst": "images/塔姆2__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆2.png",
+      "dst": "images/塔姆2__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆2.png",
+      "dst": "images/塔姆2__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆3.png",
+      "dst": "images/塔姆3__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆3.png",
+      "dst": "images/塔姆3__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆3.png",
+      "dst": "images/塔姆3__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆3.png",
+      "dst": "images/塔姆3__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔姆3.png",
+      "dst": "images/塔姆3__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔里克.png",
+      "dst": "images/塔里克__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔里克.png",
+      "dst": "images/塔里克__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔里克.png",
+      "dst": "images/塔里克__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔里克.png",
+      "dst": "images/塔里克__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塔里克.png",
+      "dst": "images/塔里克__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塞拉斯.png",
+      "dst": "images/塞拉斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "塞拉斯.png",
+      "dst": "images/塞拉斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塞拉斯.png",
+      "dst": "images/塞拉斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "塞拉斯.png",
+      "dst": "images/塞拉斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "塞拉斯.png",
+      "dst": "images/塞拉斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奇亚娜.png",
+      "dst": "images/奇亚娜__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "奇亚娜.png",
+      "dst": "images/奇亚娜__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奇亚娜.png",
+      "dst": "images/奇亚娜__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "奇亚娜.png",
+      "dst": "images/奇亚娜__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奇亚娜.png",
+      "dst": "images/奇亚娜__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽.png",
+      "dst": "images/奈德丽__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽.png",
+      "dst": "images/奈德丽__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽.png",
+      "dst": "images/奈德丽__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽.png",
+      "dst": "images/奈德丽__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽.png",
+      "dst": "images/奈德丽__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽2.png",
+      "dst": "images/奈德丽2__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽2.png",
+      "dst": "images/奈德丽2__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽2.png",
+      "dst": "images/奈德丽2__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽2.png",
+      "dst": "images/奈德丽2__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽2.png",
+      "dst": "images/奈德丽2__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽3.png",
+      "dst": "images/奈德丽3__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽3.png",
+      "dst": "images/奈德丽3__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽3.png",
+      "dst": "images/奈德丽3__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽3.png",
+      "dst": "images/奈德丽3__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奈德丽3.png",
+      "dst": "images/奈德丽3__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥莉安娜.png",
+      "dst": "images/奥莉安娜__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥莉安娜.png",
+      "dst": "images/奥莉安娜__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥莉安娜.png",
+      "dst": "images/奥莉安娜__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥莉安娜.png",
+      "dst": "images/奥莉安娜__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥莉安娜.png",
+      "dst": "images/奥莉安娜__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥恩.png",
+      "dst": "images/奥恩__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥恩.png",
+      "dst": "images/奥恩__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥恩.png",
+      "dst": "images/奥恩__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥恩.png",
+      "dst": "images/奥恩__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥恩.png",
+      "dst": "images/奥恩__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "妮蔻.png",
+      "dst": "images/妮蔻__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "妮蔻.png",
+      "dst": "images/妮蔻__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "妮蔻.png",
+      "dst": "images/妮蔻__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "妮蔻.png",
+      "dst": "images/妮蔻__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "妮蔻.png",
+      "dst": "images/妮蔻__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "娑娜.png",
+      "dst": "images/娑娜__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "娑娜.png",
+      "dst": "images/娑娜__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "娑娜.png",
+      "dst": "images/娑娜__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "娑娜.png",
+      "dst": "images/娑娜__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "娑娜.png",
+      "dst": "images/娑娜__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "孙悟空.png",
+      "dst": "images/孙悟空__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "孙悟空.png",
+      "dst": "images/孙悟空__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "孙悟空.png",
+      "dst": "images/孙悟空__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "孙悟空.png",
+      "dst": "images/孙悟空__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "孙悟空.png",
+      "dst": "images/孙悟空__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "安妮.png",
+      "dst": "images/安妮__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "安妮.png",
+      "dst": "images/安妮__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "安妮.png",
+      "dst": "images/安妮__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "安妮.png",
+      "dst": "images/安妮__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "安妮.png",
+      "dst": "images/安妮__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "安蓓萨.png",
+      "dst": "images/安蓓萨__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "安蓓萨.png",
+      "dst": "images/安蓓萨__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "安蓓萨.png",
+      "dst": "images/安蓓萨__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "安蓓萨.png",
+      "dst": "images/安蓓萨__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "安蓓萨.png",
+      "dst": "images/安蓓萨__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "峡谷先锋.png",
+      "dst": "images/峡谷先锋__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "峡谷先锋.png",
+      "dst": "images/峡谷先锋__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "峡谷先锋.png",
+      "dst": "images/峡谷先锋__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "峡谷先锋.png",
+      "dst": "images/峡谷先锋__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "峡谷先锋.png",
+      "dst": "images/峡谷先锋__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔丝塔娜.png",
+      "dst": "images/崔丝塔娜__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔丝塔娜.png",
+      "dst": "images/崔丝塔娜__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔丝塔娜.png",
+      "dst": "images/崔丝塔娜__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔丝塔娜.png",
+      "dst": "images/崔丝塔娜__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔丝塔娜.png",
+      "dst": "images/崔丝塔娜__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔斯特.png",
+      "dst": "images/崔斯特__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔斯特.png",
+      "dst": "images/崔斯特__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔斯特.png",
+      "dst": "images/崔斯特__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔斯特.png",
+      "dst": "images/崔斯特__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "崔斯特.png",
+      "dst": "images/崔斯特__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "巴德.png",
+      "dst": "images/巴德__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "巴德.png",
+      "dst": "images/巴德__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "巴德.png",
+      "dst": "images/巴德__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "巴德.png",
+      "dst": "images/巴德__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "巴德.png",
+      "dst": "images/巴德__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "布里茨.png",
+      "dst": "images/布里茨__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "布里茨.png",
+      "dst": "images/布里茨__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "布里茨.png",
+      "dst": "images/布里茨__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "布里茨.png",
+      "dst": "images/布里茨__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "布里茨.png",
+      "dst": "images/布里茨__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "布隆.png",
+      "dst": "images/布隆__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "布隆.png",
+      "dst": "images/布隆__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "布隆.png",
+      "dst": "images/布隆__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "布隆.png",
+      "dst": "images/布隆__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "布隆.png",
+      "dst": "images/布隆__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "希瓦娜.png",
+      "dst": "images/希瓦娜__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "希瓦娜.png",
+      "dst": "images/希瓦娜__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "希瓦娜.png",
+      "dst": "images/希瓦娜__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "希瓦娜.png",
+      "dst": "images/希瓦娜__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "希瓦娜.png",
+      "dst": "images/希瓦娜__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱厄斯.png",
+      "dst": "images/德莱厄斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱厄斯.png",
+      "dst": "images/德莱厄斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱厄斯.png",
+      "dst": "images/德莱厄斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱厄斯.png",
+      "dst": "images/德莱厄斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱厄斯.png",
+      "dst": "images/德莱厄斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱文.png",
+      "dst": "images/德莱文__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱文.png",
+      "dst": "images/德莱文__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱文.png",
+      "dst": "images/德莱文__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱文.png",
+      "dst": "images/德莱文__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "德莱文.png",
+      "dst": "images/德莱文__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "慎.png",
+      "dst": "images/慎__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "慎.png",
+      "dst": "images/慎__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "慎.png",
+      "dst": "images/慎__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "慎.png",
+      "dst": "images/慎__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "慎.png",
+      "dst": "images/慎__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "拉克丝.png",
+      "dst": "images/拉克丝__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "拉克丝.png",
+      "dst": "images/拉克丝__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "拉克丝.png",
+      "dst": "images/拉克丝__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "拉克丝.png",
+      "dst": "images/拉克丝__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "拉克丝.png",
+      "dst": "images/拉克丝__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "提伯斯.png",
+      "dst": "images/提伯斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "提伯斯.png",
+      "dst": "images/提伯斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "提伯斯.png",
+      "dst": "images/提伯斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "提伯斯.png",
+      "dst": "images/提伯斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "提伯斯.png",
+      "dst": "images/提伯斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "提莫.png",
+      "dst": "images/提莫__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "提莫.png",
+      "dst": "images/提莫__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "提莫.png",
+      "dst": "images/提莫__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "提莫.png",
+      "dst": "images/提莫__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "提莫.png",
+      "dst": "images/提莫__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯卡纳.png",
+      "dst": "images/斯卡纳__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯卡纳.png",
+      "dst": "images/斯卡纳__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯卡纳.png",
+      "dst": "images/斯卡纳__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯卡纳.png",
+      "dst": "images/斯卡纳__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯卡纳.png",
+      "dst": "images/斯卡纳__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯维因.png",
+      "dst": "images/斯维因__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯维因.png",
+      "dst": "images/斯维因__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯维因.png",
+      "dst": "images/斯维因__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯维因.png",
+      "dst": "images/斯维因__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "斯维因.png",
+      "dst": "images/斯维因__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "普朗克.png",
+      "dst": "images/普朗克__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "普朗克.png",
+      "dst": "images/普朗克__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "普朗克.png",
+      "dst": "images/普朗克__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "普朗克.png",
+      "dst": "images/普朗克__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "普朗克.png",
+      "dst": "images/普朗克__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "格温.png",
+      "dst": "images/格温__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "格温.png",
+      "dst": "images/格温__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "格温.png",
+      "dst": "images/格温__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "格温.png",
+      "dst": "images/格温__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "格温.png",
+      "dst": "images/格温__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "格雷福斯.png",
+      "dst": "images/格雷福斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "格雷福斯.png",
+      "dst": "images/格雷福斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "格雷福斯.png",
+      "dst": "images/格雷福斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "格雷福斯.png",
+      "dst": "images/格雷福斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "格雷福斯.png",
+      "dst": "images/格雷福斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "梅尔.png",
+      "dst": "images/梅尔__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "梅尔.png",
+      "dst": "images/梅尔__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "梅尔.png",
+      "dst": "images/梅尔__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "梅尔.png",
+      "dst": "images/梅尔__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "梅尔.png",
+      "dst": "images/梅尔__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "永恩.png",
+      "dst": "images/永恩__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "永恩.png",
+      "dst": "images/永恩__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "永恩.png",
+      "dst": "images/永恩__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "永恩.png",
+      "dst": "images/永恩__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "永恩.png",
+      "dst": "images/永恩__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克.png",
+      "dst": "images/沃里克__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克.png",
+      "dst": "images/沃里克__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克.png",
+      "dst": "images/沃里克__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克.png",
+      "dst": "images/沃里克__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克.png",
+      "dst": "images/沃里克__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克2.png",
+      "dst": "images/沃里克2__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克2.png",
+      "dst": "images/沃里克2__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克2.png",
+      "dst": "images/沃里克2__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克2.png",
+      "dst": "images/沃里克2__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃里克2.png",
+      "dst": "images/沃里克2__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "波比.png",
+      "dst": "images/波比__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "波比.png",
+      "dst": "images/波比__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "波比.png",
+      "dst": "images/波比__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "波比.png",
+      "dst": "images/波比__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "波比.png",
+      "dst": "images/波比__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "泰达米尔.png",
+      "dst": "images/泰达米尔__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "泰达米尔.png",
+      "dst": "images/泰达米尔__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "泰达米尔.png",
+      "dst": "images/泰达米尔__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "泰达米尔.png",
+      "dst": "images/泰达米尔__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "泰达米尔.png",
+      "dst": "images/泰达米尔__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "泽拉斯.png",
+      "dst": "images/泽拉斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "泽拉斯.png",
+      "dst": "images/泽拉斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "泽拉斯.png",
+      "dst": "images/泽拉斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "泽拉斯.png",
+      "dst": "images/泽拉斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "泽拉斯.png",
+      "dst": "images/泽拉斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "洛里斯.png",
+      "dst": "images/洛里斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "洛里斯.png",
+      "dst": "images/洛里斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "洛里斯.png",
+      "dst": "images/洛里斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "洛里斯.png",
+      "dst": "images/洛里斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "洛里斯.png",
+      "dst": "images/洛里斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "海克斯霸龙.png",
+      "dst": "images/海克斯霸龙__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "海克斯霸龙.png",
+      "dst": "images/海克斯霸龙__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "海克斯霸龙.png",
+      "dst": "images/海克斯霸龙__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "海克斯霸龙.png",
+      "dst": "images/海克斯霸龙__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "海克斯霸龙.png",
+      "dst": "images/海克斯霸龙__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "烬.png",
+      "dst": "images/烬__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "烬.png",
+      "dst": "images/烬__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "烬.png",
+      "dst": "images/烬__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "烬.png",
+      "dst": "images/烬__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "烬.png",
+      "dst": "images/烬__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "玛尔扎哈.png",
+      "dst": "images/玛尔扎哈__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "玛尔扎哈.png",
+      "dst": "images/玛尔扎哈__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "玛尔扎哈.png",
+      "dst": "images/玛尔扎哈__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "玛尔扎哈.png",
+      "dst": "images/玛尔扎哈__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "玛尔扎哈.png",
+      "dst": "images/玛尔扎哈__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑞兹.png",
+      "dst": "images/瑞兹__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑞兹.png",
+      "dst": "images/瑞兹__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑞兹.png",
+      "dst": "images/瑞兹__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑞兹.png",
+      "dst": "images/瑞兹__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑞兹.png",
+      "dst": "images/瑞兹__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟庄妮.png",
+      "dst": "images/瑟庄妮__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟庄妮.png",
+      "dst": "images/瑟庄妮__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟庄妮.png",
+      "dst": "images/瑟庄妮__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟庄妮.png",
+      "dst": "images/瑟庄妮__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟庄妮.png",
+      "dst": "images/瑟庄妮__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟提.png",
+      "dst": "images/瑟提__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟提.png",
+      "dst": "images/瑟提__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟提.png",
+      "dst": "images/瑟提__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟提.png",
+      "dst": "images/瑟提__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "瑟提.png",
+      "dst": "images/瑟提__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "璐璐.png",
+      "dst": "images/璐璐__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "璐璐.png",
+      "dst": "images/璐璐__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "璐璐.png",
+      "dst": "images/璐璐__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "璐璐.png",
+      "dst": "images/璐璐__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "璐璐.png",
+      "dst": "images/璐璐__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "盖伦.png",
+      "dst": "images/盖伦__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "盖伦.png",
+      "dst": "images/盖伦__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "盖伦.png",
+      "dst": "images/盖伦__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "盖伦.png",
+      "dst": "images/盖伦__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "盖伦.png",
+      "dst": "images/盖伦__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "科加斯.png",
+      "dst": "images/科加斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "科加斯.png",
+      "dst": "images/科加斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "科加斯.png",
+      "dst": "images/科加斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "科加斯.png",
+      "dst": "images/科加斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "科加斯.png",
+      "dst": "images/科加斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "米利欧.png",
+      "dst": "images/米利欧__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "米利欧.png",
+      "dst": "images/米利欧__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "米利欧.png",
+      "dst": "images/米利欧__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "米利欧.png",
+      "dst": "images/米利欧__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "米利欧.png",
+      "dst": "images/米利欧__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "约里克.png",
+      "dst": "images/约里克__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "约里克.png",
+      "dst": "images/约里克__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "约里克.png",
+      "dst": "images/约里克__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "约里克.png",
+      "dst": "images/约里克__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "约里克.png",
+      "dst": "images/约里克__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "维迦.png",
+      "dst": "images/维迦__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "维迦.png",
+      "dst": "images/维迦__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "维迦.png",
+      "dst": "images/维迦__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "维迦.png",
+      "dst": "images/维迦__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "维迦.png",
+      "dst": "images/维迦__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾克.png",
+      "dst": "images/艾克__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾克.png",
+      "dst": "images/艾克__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾克.png",
+      "dst": "images/艾克__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾克.png",
+      "dst": "images/艾克__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾克.png",
+      "dst": "images/艾克__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚.png",
+      "dst": "images/艾尼维亚__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚.png",
+      "dst": "images/艾尼维亚__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚.png",
+      "dst": "images/艾尼维亚__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚.png",
+      "dst": "images/艾尼维亚__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚.png",
+      "dst": "images/艾尼维亚__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚2.png",
+      "dst": "images/艾尼维亚2__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚2.png",
+      "dst": "images/艾尼维亚2__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚2.png",
+      "dst": "images/艾尼维亚2__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚2.png",
+      "dst": "images/艾尼维亚2__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚2.png",
+      "dst": "images/艾尼维亚2__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚3.png",
+      "dst": "images/艾尼维亚3__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚3.png",
+      "dst": "images/艾尼维亚3__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚3.png",
+      "dst": "images/艾尼维亚3__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚3.png",
+      "dst": "images/艾尼维亚3__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚3.png",
+      "dst": "images/艾尼维亚3__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚4.png",
+      "dst": "images/艾尼维亚4__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚4.png",
+      "dst": "images/艾尼维亚4__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚4.png",
+      "dst": "images/艾尼维亚4__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚4.png",
+      "dst": "images/艾尼维亚4__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾尼维亚4.png",
+      "dst": "images/艾尼维亚4__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾希.png",
+      "dst": "images/艾希__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾希.png",
+      "dst": "images/艾希__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾希.png",
+      "dst": "images/艾希__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾希.png",
+      "dst": "images/艾希__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "艾希.png",
+      "dst": "images/艾希__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "芸阿娜.png",
+      "dst": "images/芸阿娜__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "芸阿娜.png",
+      "dst": "images/芸阿娜__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "芸阿娜.png",
+      "dst": "images/芸阿娜__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "芸阿娜.png",
+      "dst": "images/芸阿娜__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "芸阿娜.png",
+      "dst": "images/芸阿娜__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "菲兹.png",
+      "dst": "images/菲兹__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "菲兹.png",
+      "dst": "images/菲兹__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "菲兹.png",
+      "dst": "images/菲兹__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "菲兹.png",
+      "dst": "images/菲兹__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "菲兹.png",
+      "dst": "images/菲兹__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "萨勒芬妮.png",
+      "dst": "images/萨勒芬妮__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "萨勒芬妮.png",
+      "dst": "images/萨勒芬妮__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "萨勒芬妮.png",
+      "dst": "images/萨勒芬妮__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "萨勒芬妮.png",
+      "dst": "images/萨勒芬妮__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "萨勒芬妮.png",
+      "dst": "images/萨勒芬妮__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "蒙多医生.png",
+      "dst": "images/蒙多医生__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "蒙多医生.png",
+      "dst": "images/蒙多医生__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "蒙多医生.png",
+      "dst": "images/蒙多医生__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "蒙多医生.png",
+      "dst": "images/蒙多医生__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "蒙多医生.png",
+      "dst": "images/蒙多医生__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "蔚.png",
+      "dst": "images/蔚__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "蔚.png",
+      "dst": "images/蔚__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "蔚.png",
+      "dst": "images/蔚__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "蔚.png",
+      "dst": "images/蔚__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "蔚.png",
+      "dst": "images/蔚__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "蕾欧娜.png",
+      "dst": "images/蕾欧娜__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "蕾欧娜.png",
+      "dst": "images/蕾欧娜__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "蕾欧娜.png",
+      "dst": "images/蕾欧娜__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "蕾欧娜.png",
+      "dst": "images/蕾欧娜__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "蕾欧娜.png",
+      "dst": "images/蕾欧娜__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "薇恩.png",
+      "dst": "images/薇恩__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "薇恩.png",
+      "dst": "images/薇恩__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "薇恩.png",
+      "dst": "images/薇恩__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "薇恩.png",
+      "dst": "images/薇恩__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "薇恩.png",
+      "dst": "images/薇恩__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "诺提勒斯.png",
+      "dst": "images/诺提勒斯__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "诺提勒斯.png",
+      "dst": "images/诺提勒斯__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "诺提勒斯.png",
+      "dst": "images/诺提勒斯__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "诺提勒斯.png",
+      "dst": "images/诺提勒斯__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "诺提勒斯.png",
+      "dst": "images/诺提勒斯__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "贝蕾亚.png",
+      "dst": "images/贝蕾亚__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "贝蕾亚.png",
+      "dst": "images/贝蕾亚__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "贝蕾亚.png",
+      "dst": "images/贝蕾亚__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "贝蕾亚.png",
+      "dst": "images/贝蕾亚__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "贝蕾亚.png",
+      "dst": "images/贝蕾亚__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "费德提克.png",
+      "dst": "images/费德提克__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "费德提克.png",
+      "dst": "images/费德提克__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "费德提克.png",
+      "dst": "images/费德提克__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "费德提克.png",
+      "dst": "images/费德提克__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "费德提克.png",
+      "dst": "images/费德提克__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "赛恩.png",
+      "dst": "images/赛恩__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "赛恩.png",
+      "dst": "images/赛恩__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "赛恩.png",
+      "dst": "images/赛恩__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "赛恩.png",
+      "dst": "images/赛恩__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "赛恩.png",
+      "dst": "images/赛恩__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "赵信.png",
+      "dst": "images/赵信__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "赵信.png",
+      "dst": "images/赵信__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "赵信.png",
+      "dst": "images/赵信__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "赵信.png",
+      "dst": "images/赵信__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "赵信.png",
+      "dst": "images/赵信__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "辛吉德.png",
+      "dst": "images/辛吉德__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "辛吉德.png",
+      "dst": "images/辛吉德__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "辛吉德.png",
+      "dst": "images/辛吉德__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "辛吉德.png",
+      "dst": "images/辛吉德__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "辛吉德.png",
+      "dst": "images/辛吉德__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "金克丝.png",
+      "dst": "images/金克丝__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "金克丝.png",
+      "dst": "images/金克丝__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "金克丝.png",
+      "dst": "images/金克丝__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "金克丝.png",
+      "dst": "images/金克丝__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "金克丝.png",
+      "dst": "images/金克丝__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "锤石.png",
+      "dst": "images/锤石__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "锤石.png",
+      "dst": "images/锤石__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "锤石.png",
+      "dst": "images/锤石__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "锤石.png",
+      "dst": "images/锤石__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "锤石.png",
+      "dst": "images/锤石__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿兹尔.png",
+      "dst": "images/阿兹尔__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿兹尔.png",
+      "dst": "images/阿兹尔__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿兹尔.png",
+      "dst": "images/阿兹尔__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿兹尔.png",
+      "dst": "images/阿兹尔__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿兹尔.png",
+      "dst": "images/阿兹尔__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿狸.png",
+      "dst": "images/阿狸__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿狸.png",
+      "dst": "images/阿狸__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿狸.png",
+      "dst": "images/阿狸__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿狸.png",
+      "dst": "images/阿狸__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "阿狸.png",
+      "dst": "images/阿狸__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克塞.png",
+      "dst": "images/雷克塞__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克塞.png",
+      "dst": "images/雷克塞__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克塞.png",
+      "dst": "images/雷克塞__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克塞.png",
+      "dst": "images/雷克塞__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克塞.png",
+      "dst": "images/雷克塞__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "黛安娜.png",
+      "dst": "images/黛安娜__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "黛安娜.png",
+      "dst": "images/黛安娜__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "黛安娜.png",
+      "dst": "images/黛安娜__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "黛安娜.png",
+      "dst": "images/黛安娜__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "黛安娜.png",
+      "dst": "images/黛安娜__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v1_s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v1_s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v1_s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v1_s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v1_s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v2_s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v2_s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v2_s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v2_s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "奥瑞利安·索尔.png",
+      "dst": "images/奥瑞利安·索尔__v2_s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "岩宝.png",
+      "dst": "images/岩宝__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "岩宝.png",
+      "dst": "images/岩宝__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "岩宝.png",
+      "dst": "images/岩宝__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "岩宝.png",
+      "dst": "images/岩宝__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "岩宝.png",
+      "dst": "images/岩宝__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃利贝尔.png",
+      "dst": "images/沃利贝尔__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃利贝尔.png",
+      "dst": "images/沃利贝尔__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃利贝尔.png",
+      "dst": "images/沃利贝尔__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃利贝尔.png",
+      "dst": "images/沃利贝尔__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沃利贝尔.png",
+      "dst": "images/沃利贝尔__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沙兵.png",
+      "dst": "images/沙兵__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "沙兵.png",
+      "dst": "images/沙兵__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沙兵.png",
+      "dst": "images/沙兵__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "沙兵.png",
+      "dst": "images/沙兵__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "沙兵.png",
+      "dst": "images/沙兵__s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v1_s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v1_s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v1_s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v1_s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v1_s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v2_s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v2_s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v2_s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v2_s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "纳什男爵.png",
+      "dst": "images/纳什男爵__v2_s05_14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克顿.png",
+      "dst": "images/雷克顿__s01_0_40.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克顿.png",
+      "dst": "images/雷克顿__s02_0_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克顿.png",
+      "dst": "images/雷克顿__s03_0_80.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克顿.png",
+      "dst": "images/雷克顿__s04_-14_60.png",
+      "status": "ok"
+    },
+    {
+      "src": "雷克顿.png",
+      "dst": "images/雷克顿__s05_14_60.png",
+      "status": "ok"
+    }
+  ]
+}
