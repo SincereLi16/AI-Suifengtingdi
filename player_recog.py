@@ -100,6 +100,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
+
+def _fast_ocr_enabled() -> bool:
+    """快速模式：优先减少重复 OCR 调用次数。"""
+    return os.environ.get("BATTLE_UI_OCR_FAST", "1").strip() != "0"
+
 # 仅用于「把 OCR 结果画到图上」的字体；与识别逻辑无关
 _FONT_CANDIDATES = [
     Path(r"C:\Windows\Fonts\msyh.ttc"),
@@ -506,26 +511,14 @@ def _ocr_boxes(ocr_engine: Any, crop_bgr: np.ndarray) -> List[Tuple[str, Any]]:
 
 def _ocr_boxes_game_text(ocr_engine: Any, crop_bgr: np.ndarray) -> List[Tuple[str, Any]]:
     """
-    纯色/渐变底上的文字与数字：先适度放大 + 原图与增强图各跑一遍 OCR，取字符更多的一路。
-    若环境变量 BATTLE_UI_OCR_UI_ENHANCE=0 则退回单次 _ocr_boxes。
+    纯色/渐变底上的文字与数字：单路 OCR（不再做原图/增强图双路择优）。
+    保留适度放大，减少重复 OCR 调用开销。
     """
     if crop_bgr.size == 0:
         return []
-    if os.environ.get("BATTLE_UI_OCR_UI_ENHANCE", "1").strip() == "0":
-        return _ocr_boxes(ocr_engine, crop_bgr)
-
     proc = _maybe_upscale(crop_bgr, min_side=64)
     proc = _scale_crop_min_height(proc, min_h=100)
-    variants = [proc, _preprocess_ui_text_bgr(proc)]
-    best: List[Tuple[str, Any]] = []
-    best_sc = (-1, -1)
-    for i, img in enumerate(variants):
-        ent = _read_text_boxes(ocr_engine, img)
-        sc = _ocr_score(ent)
-        if sc > best_sc or (sc == best_sc and i == 1):
-            best_sc = sc
-            best = ent
-    return best
+    return _read_text_boxes(ocr_engine, proc)
 
 
 def _hp_fixed_digit_rects_ref() -> List[Tuple[int, int, int, int]]:
@@ -1115,19 +1108,23 @@ def _process_bonds_grid(
     row_fs = max(10, font_size - 4)
     est_h = row_fs + 4
 
+    fast_mode = _fast_ocr_enabled()
     for bi, (bx1, by1, bx2, by2) in enumerate(blocks):
         crop = bgr[by1:by2, bx1:bx2]
         if crop.size == 0:
             continue
-        piece_precise, sample_rects = _parse_bond_piece_precise(
-            ocr_engine, bgr, bx1, by1, bx2, by2
-        )
+        sample_rects: List[Tuple[int, int, int, int]] = []
         entries = _ocr_boxes_game_text(ocr_engine, crop)
         merged = " ".join(t for t, _ in _sort_entries_reading_order(entries))
         raws.append(merged)
         cell_h = max(1, by2 - by1)
         line_rows = _bond_line_rows_from_cell(entries, cell_h)
-        piece = piece_precise or (_try_parse_activated_bond_piece(line_rows) if line_rows else None)
+        piece = _try_parse_activated_bond_piece(line_rows) if line_rows else None
+        # 精细分区 OCR 成本较高：仅在常规解析失败且非 fast 模式时兜底。
+        if not piece and (not fast_mode):
+            piece, sample_rects = _parse_bond_piece_precise(
+                ocr_engine, bgr, bx1, by1, bx2, by2
+            )
         ocr_cell = (
             " | ".join(" ".join(t for t, _ in r) for r in line_rows)
             if line_rows
@@ -1552,6 +1549,8 @@ def _ocr_gold_field(
     best_score = (-1, -1, -999999)
     best_tight: Optional[Tuple[int, int, int, int]] = None
 
+    fast_mode = _fast_ocr_enabled()
+    should_stop = False
     for tr in trim_left_ratios:
         if tr <= 0:
             sub = crop_bgr
@@ -1595,6 +1594,12 @@ def _ocr_gold_field(
                     best_tight = (tx1, ty1, tx2, ty2)
                 else:
                     best_tight = None
+                # fast 模式下识别到稳定数字后提前结束，避免重复尝试。
+                if fast_mode and best_score[0] >= 2 and best_score[1] >= 2 and best_score[2] >= -1:
+                    should_stop = True
+                    break
+        if should_stop:
+            break
 
     return best_lines, best_tight
 
@@ -1613,6 +1618,8 @@ def _ocr_streak_field(ocr_engine: Any, crop_bgr: np.ndarray) -> List[str]:
     best_lines: List[str] = []
     best_score = (-1, -1, -999999)
 
+    fast_mode = _fast_ocr_enabled()
+    should_stop = False
     for tr in trim_left_ratios:
         if tr <= 0:
             sub = crop_bgr
@@ -1633,6 +1640,12 @@ def _ocr_streak_field(ocr_engine: Any, crop_bgr: np.ndarray) -> List[str]:
             if sc > best_score:
                 best_score = sc
                 best_lines = lines
+                # fast 模式：同时出现「数字 + 胜/败字」后提前结束。
+                if fast_mode and best_score[0] >= 3 and best_score[1] >= 1 and best_score[2] >= -2:
+                    should_stop = True
+                    break
+        if should_stop:
+            break
 
     return best_lines
 
@@ -1922,9 +1935,22 @@ def process_image(
         col = colors[ci % len(colors)]
         ci += 1
         if r.key == "bonds" and r.grid_cols > 0 and r.grid_rows > 0:
-            (x1, y1, x2, y2), pick_meta = _pick_bonds_roi(
-                ocr_engine, bgr, w_img, h_img, dy=bond_roi_y_shift
-            )
+            use_dynamic_bond_roi = os.environ.get("BATTLE_UI_BONDS_DYNAMIC_ROI", "1").strip() != "0"
+            if use_dynamic_bond_roi:
+                (x1, y1, x2, y2), pick_meta = _pick_bonds_roi(
+                    ocr_engine, bgr, w_img, h_img, dy=bond_roi_y_shift
+                )
+            else:
+                y1_d, y2_d = y1 + int(bond_roi_y_shift), y2 + int(bond_roi_y_shift)
+                x1 = max(0, min(x1, w_img - 1))
+                x2 = max(x1 + 1, min(x2, w_img))
+                y1 = max(0, min(y1_d, h_img - 1))
+                y2 = max(y1 + 1, min(y2_d, h_img))
+                pick_meta = {
+                    "mode": "fixed",
+                    "selected": {"rect": (x1, y1, x2, y2), "score": -1, "chars": -1},
+                    "candidates": [],
+                }
             _draw_roi_rect(vis, x1, y1, x2, y2, col, 3)
             summary["fields"][r.key] = _process_bonds_grid(
                 vis,
