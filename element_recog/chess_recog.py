@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -26,12 +27,143 @@ FONT_PATHS = [
 ]
 
 
+def _composite_bgra_on_white(bgra: np.ndarray) -> np.ndarray:
+    """BGRA 叠白底 → BGR uint8（与 _load_image allow_alpha 行为一致）。"""
+    alpha = bgra[:, :, 3:4].astype(np.float32) / 255.0
+    bgr = bgra[:, :, :3].astype(np.float32)
+    white = np.ones_like(bgr) * 255.0
+    return (bgr * alpha + white * (1 - alpha)).astype(np.uint8)
+
+
+def _column_is_uniform_light_margin(
+    gray_col: np.ndarray,
+    *,
+    mean_min: float = 248.0,
+    std_max: float = 4.0,
+) -> bool:
+    """判定单列是否为近纯白、低方差（裁切模板左右空边，不碰血条本体）。"""
+    return float(np.mean(gray_col)) >= mean_min and float(np.std(gray_col)) <= std_max
+
+
+def _trim_gray_lr_light_columns(
+    gray: np.ndarray,
+    *,
+    mean_min: float = 248.0,
+    std_max: float = 4.0,
+) -> np.ndarray:
+    """去掉左右「近纯白」列；若无变化则返回原数组。"""
+    if gray.ndim != 2 or gray.size == 0:
+        return gray
+    h, w = gray.shape
+    x0, x1 = 0, w - 1
+    while x0 < w and _column_is_uniform_light_margin(gray[:, x0], mean_min=mean_min, std_max=std_max):
+        x0 += 1
+    while x1 >= x0 and _column_is_uniform_light_margin(gray[:, x1], mean_min=mean_min, std_max=std_max):
+        x1 -= 1
+    if x0 > x1:
+        return gray
+    if x0 == 0 and x1 == w - 1:
+        return gray
+    return gray[:, x0 : x1 + 1]
+
+
+def _trim_color_lr_light_columns(
+    img3: np.ndarray,
+    *,
+    mean_min: float = 248.0,
+    std_max: float = 4.0,
+) -> np.ndarray:
+    """对 BGR 或 BGRA 条带：按叠白后的灰度去掉左右近纯白列。"""
+    if img3.ndim != 3 or img3.shape[2] not in (3, 4) or img3.size == 0:
+        return img3
+    if img3.shape[2] == 4:
+        gray = cv2.cvtColor(_composite_bgra_on_white(img3), cv2.COLOR_BGR2GRAY)
+    else:
+        gray = cv2.cvtColor(img3, cv2.COLOR_BGR2GRAY)
+    wcur = img3.shape[1]
+    x_l = 0
+    while x_l < wcur and _column_is_uniform_light_margin(
+        gray[:, x_l], mean_min=mean_min, std_max=std_max
+    ):
+        x_l += 1
+    x_r = wcur - 1
+    while x_r >= x_l and _column_is_uniform_light_margin(
+        gray[:, x_r], mean_min=mean_min, std_max=std_max
+    ):
+        x_r -= 1
+    if x_r < x_l:
+        return img3
+    if x_l == 0 and x_r == wcur - 1:
+        return img3
+    return img3[:, x_l : x_r + 1, :]
+
+
+def trim_healthbar_template_numpy(
+    img: np.ndarray,
+    *,
+    alpha_thr: int = 8,
+    white_mean_min: float = 248.0,
+    white_std_max: float = 4.0,
+) -> np.ndarray:
+    """
+    裁剪血条模板：先去掉左右全透明列，再去掉叠白后左右「近纯白」列，
+    使 PNG 最左列尽量对齐真实血条左缘（无透明/白边占位）。
+
+    与 ``load_healthbar_templates`` 使用同一规则。
+    """
+    if img is None or img.size == 0:
+        return img
+    if img.ndim == 2:
+        return _trim_gray_lr_light_columns(
+            img, mean_min=white_mean_min, std_max=white_std_max
+        )
+    if img.ndim != 3:
+        return img
+    c = img.shape[2]
+    if c == 4:
+        a = img[:, :, 3]
+        w = int(a.shape[1])
+        x0, x1 = 0, w - 1
+        while x0 < w and int(np.max(a[:, x0])) <= int(alpha_thr):
+            x0 += 1
+        while x1 >= x0 and int(np.max(a[:, x1])) <= int(alpha_thr):
+            x1 -= 1
+        if x0 > x1:
+            return img
+        sl = img[:, x0 : x1 + 1, :]
+        return _trim_color_lr_light_columns(
+            sl, mean_min=white_mean_min, std_max=white_std_max
+        )
+    if c == 3:
+        return _trim_color_lr_light_columns(
+            img, mean_min=white_mean_min, std_max=white_std_max
+        )
+    return img
+
+
+def _load_healthbar_template_bgr(path: Path) -> np.ndarray:
+    """读单张血条模板：按 trim 规则裁边后转为 BGR，供 matchTemplate。"""
+    raw = np.fromfile(str(path), dtype=np.uint8)
+    img = cv2.imdecode(raw, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise FileNotFoundError(f"无法读取图像: {path}")
+    trimmed = trim_healthbar_template_numpy(img)
+    if trimmed.ndim == 2:
+        return cv2.cvtColor(trimmed, cv2.COLOR_GRAY2BGR)
+    if trimmed.shape[-1] == 4:
+        return _composite_bgra_on_white(trimmed)
+    return trimmed
+
+
 def load_healthbar_templates(path: Path) -> List[np.ndarray]:
     """
     读取血条模板：
     - 若 path 是文件：读一张
     - 若 path 是目录：读取目录下所有 png/jpg/jpeg/webp，并按文件名排序
     返回 [BGR, ...]，为空则抛错。
+
+    每张图会先 ``trim_healthbar_template_numpy``：去掉左右透明列与近纯白列，
+    避免模板左缘相对游戏血条左缘整体偏右。
     """
     path = Path(path)
     exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
@@ -50,7 +182,7 @@ def load_healthbar_templates(path: Path) -> List[np.ndarray]:
         if not p.is_file():
             continue
         try:
-            templates.append(_load_image(p))
+            templates.append(_load_healthbar_template_bgr(p))
         except Exception:
             continue
     if not templates:
@@ -146,6 +278,25 @@ def _nms_boxes(
     return [tuple(map(int, boxes[i])) for i in keep]
 
 
+def _to_edge_mag_u8(bgr: np.ndarray) -> np.ndarray:
+    """Sobel 梯度幅值，归一化到 uint8；强调轮廓/平行边，减弱纯色块与部分光照差。"""
+    if bgr.ndim == 2:
+        g = bgr
+    else:
+        g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(gx, gy)
+    return cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+
+def _bgr_to_match_plane(bgr: np.ndarray, *, use_edges: bool) -> np.ndarray:
+    if use_edges:
+        return _to_edge_mag_u8(bgr)
+    # 与旧版一致：BGR 多通道直接 matchTemplate（各通道参与相关，再求和）
+    return bgr
+
+
 def detect_healthbars_by_templates(
     scene: np.ndarray,
     templates: List[np.ndarray],
@@ -156,14 +307,19 @@ def detect_healthbars_by_templates(
     threshold: float = 0.65,
     nms_iou: float = 0.35,
     nms_center_dist_px: Optional[float] = 28.0,
+    use_edges: bool = False,
 ) -> List[Tuple[int, int, int, int]]:
     """
     多模板版本：对每个 template 做多尺度匹配后汇总，再统一 NMS。
     适用于：一星/二星/三星血条模板同时存在的场景。
+
+    ``use_edges=True``：在 Sobel 梯度幅值图上做 ``TM_CCOEFF_NORMED``，更贴合「上下平行边」类形状，
+    减轻大 ROI 内无关纹理对灰度/颜色相关匹配的干扰（仍非几何意义上的直线检测）。
     """
     if not templates:
         return []
-    H, W = scene.shape[:2]
+    scene_plane = _bgr_to_match_plane(scene, use_edges=use_edges)
+    H, W = scene_plane.shape[:2]
     all_boxes: List[Tuple[int, int, int, int]] = []
     all_scores: List[float] = []
 
@@ -187,7 +343,10 @@ def detect_healthbars_by_templates(
             if w > W or h > H:
                 continue
             resized = cv2.resize(template, (w, h), interpolation=cv2.INTER_LINEAR)
-            result = cv2.matchTemplate(scene, resized, cv2.TM_CCOEFF_NORMED)
+            tpl_plane = _bgr_to_match_plane(resized, use_edges=use_edges)
+            if tpl_plane.shape[0] < 2 or tpl_plane.shape[1] < 2:
+                continue
+            result = cv2.matchTemplate(scene_plane, tpl_plane, cv2.TM_CCOEFF_NORMED)
             ys, xs = np.where(result >= threshold)
             for x, y in zip(xs, ys):
                 all_boxes.append((int(x), int(y), w, h))
@@ -326,13 +485,8 @@ ROI = (600, 100, 1720, 720)  # x1,y1,x2,y2
 
 # 与 `batch_recog_d84.py` 默认 `--out` 根目录名一致。
 # 棋盘/裁切类脚本应优先用 `default_batch_result_json` + `load_bar_boxes_from_result_json` 读取与 batch 完全一致的 bar_box；
-# 无 JSON 时用 `_detect_healthbars_in_roi`（默认会去掉 ROI 顶带小龙式细条，与识别管线前置一致）。
+# 无 JSON 时用 `_detect_healthbars_in_roi`；顶带小龙细条可在 bars_recog 后处理中再滤。
 DEFAULT_BATCH_EMBED_OUT_DIRNAME = "chess_recog"
-
-# 顶部「碎片框 → 整段血条」时，水平位置用碎片几何中心对齐整条血条宽度。
-# 纳什男爵等 Boss 顶栏：模板常命中略偏左的装饰/小条，相对真实血条中心会整体偏左约 5~10px，
-# 此处对**仅经 snap 修正的顶栏框**做右移补偿（可调）。
-TOP_BAR_SNAP_NUDGE_X_PX = 8
 
 BELOW_BAR_PX = 60
 CENTER_OFFSET_X = 10  # 与你当前圆心偏移一致
@@ -502,110 +656,27 @@ def _collapse_topk_to_hero(top: List[Tuple[str, float]]) -> List[Tuple[str, floa
     return out
 
 
-def _dedup_boxes_by_center(
-    boxes: List[Tuple[int, int, int, int]],
-    dist_thresh: int = 10,
-) -> List[Tuple[int, int, int, int]]:
-    """
-    二次去重：对多模板/多尺度匹配残留的“近似重复框”做中心点距离聚类。
-    """
-    if not boxes:
-        return []
-    dist2 = float(dist_thresh * dist_thresh)
-    kept: List[Tuple[int, int, int, int]] = []
-    centers: List[Tuple[float, float]] = []
-    # 面积大的优先（同一血条的重复框通常面积更接近）
-    for (x, y, w, h) in sorted(boxes, key=lambda b: -(b[2] * b[3])):
-        cx = float(x + w / 2.0)
-        cy = float(y + h / 2.0)
-        ok = True
-        for (kx, ky) in centers:
-            dx = cx - kx
-            dy = cy - ky
-            if dx * dx + dy * dy <= dist2:
-                ok = False
-                break
-        if ok:
-            kept.append((x, y, w, h))
-            centers.append((cx, cy))
-    return kept
-
-
-def _xywh_iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
-    ax, ay, aw, ah = (int(a[0]), int(a[1]), int(a[2]), int(a[3]))
-    bx, by, bw, bh = (int(b[0]), int(b[1]), int(b[2]), int(b[3]))
-    x1 = max(ax, bx)
-    y1 = max(ay, by)
-    x2 = min(ax + aw, bx + bw)
-    y2 = min(ay + ah, by + bh)
-    iw, ih = max(0, x2 - x1), max(0, y2 - y1)
-    inter = float(iw * ih)
-    if inter <= 0:
-        return 0.0
-    ua = float(max(1, aw * ah) + max(1, bw * bh) - inter)
-    return inter / ua
-
-
-def _xywh_inter_over_min_area(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
-    ax, ay, aw, ah = (int(a[0]), int(a[1]), int(a[2]), int(a[3]))
-    bx, by, bw, bh = (int(b[0]), int(b[1]), int(b[2]), int(b[3]))
-    x1 = max(ax, bx)
-    y1 = max(ay, by)
-    x2 = min(ax + aw, bx + bw)
-    y2 = min(ay + ah, by + bh)
-    iw, ih = max(0, x2 - x1), max(0, y2 - y1)
-    inter = float(iw * ih)
-    if inter <= 0:
-        return 0.0
-    aa = float(max(1, aw * ah))
-    ab = float(max(1, bw * bh))
-    return inter / min(aa, ab)
-
-
-def _near_duplicate_healthbars_row(
+def _boxes_intersect_positive_area(
     a: Tuple[int, int, int, int],
     b: Tuple[int, int, int, int],
-    *,
-    center_dist2_max: float,
-    hor_ov_min: float,
-    vert_rel_max: float,
 ) -> bool:
-    """同一行上、中心很近且水平投影重叠大：多为同一血条的模板重复命中。"""
-    ax, ay, aw, ah = (int(a[0]), int(a[1]), int(a[2]), int(a[3]))
-    bx, by, bw, bh = (int(b[0]), int(b[1]), int(b[2]), int(b[3]))
-    if min(aw, ah, bw, bh) < 6:
-        return False
-    cax, cay = ax + aw / 2.0, ay + ah / 2.0
-    cbx, cby = bx + bw / 2.0, by + bh / 2.0
-    if abs(cay - cby) > vert_rel_max * max(float(ah), float(bh)):
-        return False
-    dx, dy = cax - cbx, cay - cby
-    if dx * dx + dy * dy > center_dist2_max:
-        return False
-    awf, bwf = float(aw), float(bw)
-    ax2, bx2 = ax + awf, bx + bwf
-    il, ir = max(ax, bx), min(ax2, bx2)
-    inter = max(0.0, ir - il)
-    hor_ov = inter / max(1e-6, min(awf, bwf))
-    return hor_ov >= hor_ov_min
+    """两轴对齐框是否相交且交集面积 > 0（边贴边不算重合）。"""
+    ax, ay, aw, ah = map(int, a)
+    bx, by, bw, bh = map(int, b)
+    x1 = max(ax, bx)
+    y1 = max(ay, by)
+    x2 = min(ax + aw, bx + bw)
+    y2 = min(ay + ah, by + bh)
+    return x2 > x1 and y2 > y1
 
 
-def _merge_overlapping_bar_boxes(
-    boxes: List[Tuple[int, int, int, int]],
-    *,
-    iou_merge: float = 0.12,
-    iomin_merge: float = 0.28,
-    center_dist_px: float = 36.0,
-    hor_ov_min: float = 0.52,
-    vert_rel_max: float = 0.62,
-) -> List[Tuple[int, int, int, int]]:
+def _merge_overlapping_boxes_union(boxes: List[Tuple[int, int, int, int]]) -> List[Tuple[int, int, int, int]]:
     """
-    将明显重叠/套叠的重复血条框合并为一条（保留面积最大的框）。
-    解决 fightboard 上同一英雄出现两个高度重叠检测框的问题。
+    仅合并「有二维重合区域」的框（并查集），每组取外接矩形。
+    仅分块相邻、但无重叠的多个血条不会被合并。
     """
     if len(boxes) <= 1:
         return list(boxes)
-
     n = len(boxes)
     parent = list(range(n))
 
@@ -620,19 +691,9 @@ def _merge_overlapping_bar_boxes(
         if ri != rj:
             parent[rj] = ri
 
-    dist2 = float(center_dist_px * center_dist_px)
     for i in range(n):
         for j in range(i + 1, n):
-            io = _xywh_iou(boxes[i], boxes[j])
-            im = _xywh_inter_over_min_area(boxes[i], boxes[j])
-            near = _near_duplicate_healthbars_row(
-                boxes[i],
-                boxes[j],
-                center_dist2_max=dist2,
-                hor_ov_min=hor_ov_min,
-                vert_rel_max=vert_rel_max,
-            )
-            if io >= iou_merge or im >= iomin_merge or near:
+            if _boxes_intersect_positive_area(boxes[i], boxes[j]):
                 _union(i, j)
 
     groups: Dict[int, List[int]] = {}
@@ -642,8 +703,11 @@ def _merge_overlapping_bar_boxes(
 
     merged: List[Tuple[int, int, int, int]] = []
     for _rid, idxs in groups.items():
-        best_i = max(idxs, key=lambda k: int(boxes[k][2]) * int(boxes[k][3]))
-        merged.append(tuple(map(int, boxes[best_i])))
+        xs0 = min(boxes[i][0] for i in idxs)
+        ys0 = min(boxes[i][1] for i in idxs)
+        xs1 = max(boxes[i][0] + boxes[i][2] for i in idxs)
+        ys1 = max(boxes[i][1] + boxes[i][3] for i in idxs)
+        merged.append((int(xs0), int(ys0), int(xs1 - xs0), int(ys1 - ys0)))
     merged.sort(key=lambda b: (b[1], b[0]))
     return merged
 
@@ -689,6 +753,46 @@ def _build_roi_tiles_adaptive(
     return tiles
 
 
+def _build_roi_tiles_fine(
+    cw: int,
+    ch: int,
+    ref_bar_w: int,
+    ref_bar_h: int,
+) -> List[Tuple[int, int, int, int]]:
+    """
+    比 `_build_roi_tiles_adaptive` 更细的 Fightboard 分块（单块约 2～3 个血条宽），
+    降低「整 ROI 一次匹配」时背景噪声导致的误检；与 simple_tiled 策略配合使用。
+    """
+    bw = max(40, int(ref_bar_w))
+    bh = max(8, int(ref_bar_h))
+    tile_w = int(max(160, min(340, bw * 3)))
+    tile_h = int(max(140, min(320, bh * 12)))
+    overlap_x = int(max(32, min(100, bw)))
+    overlap_y = int(max(24, min(80, bh * 2)))
+    step_x = max(48, tile_w - overlap_x)
+    step_y = max(48, tile_h - overlap_y)
+    x_starts = list(range(0, max(1, cw - tile_w + 1), step_x))
+    y_starts = list(range(0, max(1, ch - tile_h + 1), step_y))
+    if not x_starts:
+        x_starts = [0]
+    if not y_starts:
+        y_starts = [0]
+    last_x = max(0, cw - tile_w)
+    last_y = max(0, ch - tile_h)
+    if x_starts[-1] != last_x:
+        x_starts.append(last_x)
+    if y_starts[-1] != last_y:
+        y_starts.append(last_y)
+
+    tiles: List[Tuple[int, int, int, int]] = []
+    for ty in y_starts:
+        for tx in x_starts:
+            tx2 = min(cw, tx + tile_w)
+            ty2 = min(ch, ty + tile_h)
+            tiles.append((int(tx), int(ty), int(tx2 - tx), int(ty2 - ty)))
+    return tiles
+
+
 def _estimate_ref_bar_size(templates: List[np.ndarray]) -> Tuple[int, int]:
     """从模板估计参考血条尺寸（取中位数，抗异常模板）。"""
     if not templates:
@@ -699,42 +803,6 @@ def _estimate_ref_bar_size(templates: List[np.ndarray]) -> Tuple[int, int]:
         return (109, 18)
     mid = len(ws) // 2
     return (int(ws[mid]), int(hs[mid]))
-
-
-def _snap_top_bar_fragment_to_full_bar(
-    box: Tuple[int, int, int, int],
-    ref_w: int,
-    ref_h: int,
-    cw: int,
-    ch: int,
-    *,
-    top_band_y: int = 90,
-    nudge_x: int = TOP_BAR_SNAP_NUDGE_X_PX,
-) -> Tuple[int, int, int, int]:
-    """
-    顶部区域（如 11.png 纳什男爵）模板匹配常会命中「血条上方装饰/小条」而非整条血条，
-    得到又扁又窄的框。若判定为碎片，则在 ROI 局部坐标下改为「装饰下方 + 参考宽高」的整段血条。
-
-    水平方向：默认以碎片中心对齐整条血条；Boss 顶栏碎片相对真实血条常略偏左，故用 nudge_x 右移补偿。
-    """
-    x, y, w, h = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
-    if y > top_band_y:
-        return box
-    # 已是常见整段血条尺寸，不改动（与 filt_main 中 is_normal 一致）
-    if w >= 80 and h >= 13:
-        return box
-    w_bar = int(max(90, min(ref_w, 120)))
-    h_bar = int(max(14, min(ref_h, 22)))
-    cx = x + w / 2.0
-    x_new = int(round(cx - w_bar / 2.0)) + int(nudge_x)
-    x_new = max(0, min(x_new, max(0, cw - w_bar)))
-    # 碎片在整条血条上方：新框顶边 = 碎片底边（血条从这里开始）
-    y_new = y + h
-    if y_new + h_bar > ch:
-        y_new = max(0, ch - h_bar)
-    if y_new < 0:
-        y_new = 0
-    return (x_new, y_new, w_bar, h_bar)
 
 
 def is_wild_dragon_strip_geometry(
@@ -748,9 +816,8 @@ def is_wild_dragon_strip_geometry(
     """
     仅剔除「典型野怪小龙」顶条（约 52×8～54×9），与纳什 Boss 顶条碎片区分。
 
-    注意：纳什碎片常见 ~59×11、面积 600+，若用「w≤60 且 h≤11 且面积≤720」会误伤并在 snap 前删掉，
-    导致男爵条只能靠其它检测路径补回甚至丢失。故这里**收紧**为偏小的宽/高/面积上限；
-    略大的顶条一律保留，走 `_snap_top_bar_fragment_to_full_bar`。
+    注意：纳什碎片常见 ~59×11、面积 600+，若用「w≤60 且 h≤11 且面积≤720」会误伤。
+    故这里**收紧**为偏小的宽/高/面积上限；略大的顶条一律保留。
     """
     if int(y_abs) > int(roi_y1) + int(band_y):
         return False
@@ -823,15 +890,22 @@ def _compute_confidence(stage: str, used_samples: int, best_score: float,
             return "low"
 
 
-
-def _detect_healthbars_in_roi(
+def _detect_healthbars_in_roi_simple(
     scene: np.ndarray,
     templates: List[np.ndarray],
     roi: Tuple[int, int, int, int],
+    *,
+    threshold: float = 0.62,
+    use_edges: bool = False,
 ) -> List[Tuple[int, int, int, int]]:
+    """
+    Fightboard 血条检测：ROI 内细粒度分块 + 单阈值模板匹配；无输出则整幅 ROI 回退。
+    仅对「二维重合面积 > 0」的框做合并（多分块重复命中同一血条时并成外接矩形）。
+
+    - ``use_edges=True``：在 Sobel 梯度幅值图上匹配（``simple_tiled_edges``）。
+    """
     x1, y1, x2, y2 = roi
     H, W = scene.shape[:2]
-    # clamp 到图像范围，避免 y1 变负导致切片语义错误
     x1 = max(0, min(int(x1), W))
     x2 = max(0, min(int(x2), W))
     y1 = max(0, min(int(y1), H))
@@ -841,137 +915,56 @@ def _detect_healthbars_in_roi(
         return []
 
     ch, cw = crop.shape[:2]
-    # 分块检测（带重叠）：
-    # 在密集血条场景下，局部检测能减少相邻血条互相干扰/抑制。
     ref_w, ref_h = _estimate_ref_bar_size(templates)
-    tiles = _build_roi_tiles_adaptive(cw, ch, ref_w, ref_h)
+    tiles = _build_roi_tiles_fine(cw, ch, ref_w, ref_h)
 
     all_boxes: List[Tuple[int, int, int, int]] = []
     for tx, ty, tw, th in tiles:
         sub = crop[ty : ty + th, tx : tx + tw]
         if sub.size == 0:
             continue
-        # 分块内保持原始保守参数，避免误检上升
-        sub_boxes = detect_healthbars_by_templates(sub, templates, threshold=0.60, nms_iou=0.50)
+        sub_boxes = detect_healthbars_by_templates(
+            sub, templates, threshold=float(threshold), nms_iou=0.50, use_edges=use_edges
+        )
         for (bx, by, bw, bh) in sub_boxes:
             all_boxes.append((int(bx + tx), int(by + ty), int(bw), int(bh)))
 
-    # 极端情况下回退到整图检测（防止分块参数不适配导致空检）
     if not all_boxes:
-        all_boxes = detect_healthbars_by_templates(crop, templates, threshold=0.60, nms_iou=0.50)
-
-    boxes_main = _dedup_boxes_by_center(all_boxes, dist_thresh=14)
-    # 过滤中下区域的极小伪框（例如 65x10），减少重复识别；
-    # 顶部保留小框，兼容纳什男爵等高位小血条。
-    top_small_band_y = 90
-    filt_main: List[Tuple[int, int, int, int]] = []
-    for (x, y, w, h) in boxes_main:
-        is_normal = (int(w) >= 80 and int(h) >= 13)
-        is_top_small = (int(y) <= top_small_band_y and int(w) >= 50 and int(h) >= 8)
-        if is_normal or is_top_small:
-            filt_main.append((int(x), int(y), int(w), int(h)))
-    boxes_main = _dedup_boxes_by_center(filt_main, dist_thresh=14)
-
-    # 二次补检（低阈值）：
-    # 仅吸收“形状像血条”的框，并且要求与主检测不重合，避免误检明显上升。
-    lo_boxes = detect_healthbars_by_templates(crop, templates, threshold=0.56, nms_iou=0.50)
-    added: List[Tuple[int, int, int, int]] = []
-    # 经验形状约束：适配当前项目常见的 109x18 / 87x14 血条簇
-    min_w, max_w = 80, 116
-    min_h, max_h = 13, 20
-    dist2_gate = float(24 * 24)
-    for (x, y, w, h) in lo_boxes:
-        if not (min_w <= int(w) <= max_w and min_h <= int(h) <= max_h):
-            continue
-        cx = float(x + w / 2.0)
-        cy = float(y + h / 2.0)
-        too_close = False
-        for (bx, by, bw, bh) in boxes_main:
-            kx = float(bx + bw / 2.0)
-            ky = float(by + bh / 2.0)
-            dx = cx - kx
-            dy = cy - ky
-            if dx * dx + dy * dy <= dist2_gate:
-                too_close = True
-                break
-        if not too_close:
-            added.append((int(x), int(y), int(w), int(h)))
-
-    # 低阈值高区补检（通用几何，不做语义特判）：
-    # 全区 0.56 对顶区某些整段条（如 11.png 的纳什）召回不足，这里仅在高区再走一遍 0.50。
-    lo_top_boxes = detect_healthbars_by_templates(crop, templates, threshold=0.50, nms_iou=0.50)
-    for (x, y, w, h) in lo_top_boxes:
-        y_abs = int(y + y1)
-        if int(y_abs) > int(TOP_ZONE_MAX_Y_ABS):
-            continue
-        if not (min_w <= int(w) <= max_w and min_h <= int(h) <= max_h):
-            continue
-        cx = float(x + w / 2.0)
-        cy = float(y + h / 2.0)
-        too_close = False
-        for (bx, by, bw, bh) in boxes_main:
-            kx = float(bx + bw / 2.0)
-            ky = float(by + bh / 2.0)
-            if (cx - kx) ** 2 + (cy - ky) ** 2 <= dist2_gate:
-                too_close = True
-                break
-        if not too_close:
-            for (ax, ay, aw, ah) in added:
-                kx = float(ax + aw / 2.0)
-                ky = float(ay + ah / 2.0)
-                if (cx - kx) ** 2 + (cy - ky) ** 2 <= dist2_gate:
-                    too_close = True
-                    break
-        if not too_close:
-            added.append((int(x), int(y), int(w), int(h)))
-
-    boxes = _dedup_boxes_by_center(boxes_main + added, dist_thresh=14)
-
-    # 顶部小框再聚合一次：避免一个高位血条被拆成多个 54x9 小框
-    top_big: List[Tuple[int, int, int, int]] = []
-    top_small: List[Tuple[int, int, int, int]] = []
-    for b in boxes:
-        x, y, w, h = b
-        if int(y) <= top_small_band_y and int(w) < 70 and int(h) <= 12:
-            top_small.append(b)
-        else:
-            top_big.append(b)
-    if top_small:
-        merged_top_small: List[Tuple[int, int, int, int]] = []
-        centers: List[Tuple[float, float]] = []
-        dist2 = float(46 * 46)
-        # 面积大优先保留
-        for (x, y, w, h) in sorted(top_small, key=lambda b: -(b[2] * b[3])):
-            cx = float(x + w / 2.0)
-            cy = float(y + h / 2.0)
-            ok = True
-            for (kx, ky) in centers:
-                dx = cx - kx
-                dy = cy - ky
-                if dx * dx + dy * dy <= dist2:
-                    ok = False
-                    break
-            if ok:
-                merged_top_small.append((int(x), int(y), int(w), int(h)))
-                centers.append((cx, cy))
-        boxes = top_big + merged_top_small
-
-    # 顶部碎片框 → 整段血条（纳什男爵等）：在转回全图坐标前处理
-    ref_w, ref_h = _estimate_ref_bar_size(templates)
-    fixed: List[Tuple[int, int, int, int]] = []
-    for b in boxes:
-        fx, fy, fw, fh = _snap_top_bar_fragment_to_full_bar(
-            b, ref_w, ref_h, cw, ch, top_band_y=top_small_band_y
+        all_boxes = detect_healthbars_by_templates(
+            crop, templates, threshold=float(threshold), nms_iou=0.50, use_edges=use_edges
         )
-        fixed.append((fx, fy, fw, fh))
-    boxes = _dedup_boxes_by_center(fixed, dist_thresh=18)
-    boxes = _merge_overlapping_bar_boxes(boxes)
+
+    boxes_merged = _merge_overlapping_boxes_union(all_boxes)
 
     out: List[Tuple[int, int, int, int]] = []
-    for (x, y, w, h) in boxes:
+    for (x, y, w, h) in boxes_merged:
         ya = int(y + y1)
         out.append((int(x + x1), ya, int(w), int(h)))
     return out
+
+
+def _detect_healthbars_in_roi(
+    scene: np.ndarray,
+    templates: List[np.ndarray],
+    roi: Tuple[int, int, int, int],
+    *,
+    strategy: str = "legacy",
+    simple_threshold: float = 0.62,
+) -> List[Tuple[int, int, int, int]]:
+    """
+    血条检测入口（统一实现）。
+
+    ``strategy`` 仅决定是否使用 Sobel 边缘平面：``simple_tiled_edges`` → ``use_edges=True``；
+    ``legacy`` / ``simple_tiled`` 均为 BGR 平面，区别仅在于调用方传入的阈值等约定。
+    """
+    use_edges = str(strategy).strip().lower() == "simple_tiled_edges"
+    return _detect_healthbars_in_roi_simple(
+        scene,
+        templates,
+        roi,
+        threshold=float(simple_threshold),
+        use_edges=use_edges,
+    )
 
 
 def _crop_circle_bgra(scene_bgr: np.ndarray, cx: int, cy: int, r: int) -> np.ndarray:
@@ -1188,6 +1181,40 @@ def _topk_cosine(
     return [(db_names[int(i)], float(sims[int(i)])) for i in idx]
 
 
+def _embed_batch_topk(
+    model,
+    transform,
+    device,
+    bgr_list: List[np.ndarray],
+    db_names: List[str],
+    db_mat: np.ndarray,
+    topk: int = 5,
+) -> List[List[Tuple[str, float]]]:
+    """
+    多枚 crop 一次 ViT 前向，再逐枚 L2 归一化 + cosine top-k。
+    与逐枚 ``model(x.unsqueeze(0))`` 在数学上等价（同一批输入时）。
+    """
+    if not bgr_list:
+        return []
+    import torch
+    from PIL import Image
+
+    tensors = []
+    for bgr in bgr_list:
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        tensors.append(transform(Image.fromarray(rgb)))
+    batch = torch.stack(tensors, dim=0).to(device)
+    with torch.no_grad():
+        feats = model(batch)
+    feats = feats.detach().cpu().numpy().astype(np.float32)
+    out: List[List[Tuple[str, float]]] = []
+    for i in range(feats.shape[0]):
+        q = feats[i].reshape(-1)
+        q = q / (np.linalg.norm(q) + 1e-8)
+        out.append(_topk_cosine(q, db_names, db_mat, topk=topk))
+    return out
+
+
 def run_recognition(
     *,
     image_path: Path,
@@ -1234,10 +1261,26 @@ def run_recognition(
     device=None,
     transform=None,
     piece_db: Optional[List[Tuple[str, np.ndarray]]] = None,
+    profile_timings: Optional[Dict[str, float]] = None,
+    # pipeline v3：同阶段多采样合并为一次前向；生产可关 crops 落盘以省 I/O
+    batch_embed: bool = False,
+    save_debug_crops: bool = True,
+    # 在 batch_embed=True 时：所有血条的 Stage1 采样 crop 拼成一次前向（再按条切片），减少 forward 次数
+    cross_bar_stage1_batch_embed: bool = False,
+    # 血条模板检测：legacy 多轮补检 或 simple_tiled（更细分块、单阈值，通常更快、误检更少）
+    bar_detect_strategy: str = "legacy",
+    bar_detect_simple_threshold: float = 0.62,
 ) -> Dict[str, Any]:
     """
     以“多点圆形采样 + embedding 聚合投票”运行一次识别。
     会写入 output_dir：标记图、crops、result.json；同时返回 out_json dict。
+    若传入 profile_timings，将写入各阶段耗时（秒），便于 pipeline 调试。
+
+    ``batch_embed=True`` 时，Stage1/Stage2 各自将本阶段全部采样 crop 合并为一次 ``model(batch)``，
+    逻辑与逐枚 forward 一致；``save_debug_crops=False`` 时跳过 crops 目录下的 PNG 写入。
+
+    ``cross_bar_stage1_batch_embed=True`` 且 ``batch_embed=True`` 时，Stage1 先对**全部血条**的
+    ``len(samples)`` 枚 crop 做一次 ``model(batch)``，数值与「逐条血条 batch」一致；Stage2 仍按条 batch。
     """
     img_path = Path(image_path)
     tpl_path = Path(template_path)
@@ -1256,10 +1299,25 @@ def run_recognition(
     circle_diameter = int(circle_diameter)
     r = max(8, circle_diameter // 2)
 
+    t_prof0 = time.perf_counter()
+    t_seg = t_prof0
+
     scene = _load_image(img_path)
     templates = load_healthbar_templates(tpl_path)
+    if profile_timings is not None:
+        profile_timings["load_scene_templates"] = time.perf_counter() - t_seg
+        t_seg = time.perf_counter()
 
-    boxes = _detect_healthbars_in_roi(scene, templates, ROI)
+    boxes = _detect_healthbars_in_roi(
+        scene,
+        templates,
+        ROI,
+        strategy=str(bar_detect_strategy),
+        simple_threshold=float(bar_detect_simple_threshold),
+    )
+    if profile_timings is not None:
+        profile_timings["detect_healthbars"] = time.perf_counter() - t_seg
+        t_seg = time.perf_counter()
 
     # embedding 模型（默认 DINOv2-ViT-S）
     if model is None or device is None or transform is None:
@@ -1269,6 +1327,9 @@ def run_recognition(
             piece_dir, model, device, transform, embed_backbone, root=project_dir()
         )
     db_names, db_mat = _prepare_piece_db_matrix(piece_db)
+    if profile_timings is not None:
+        profile_timings["prepare_model_and_db"] = time.perf_counter() - t_seg
+        t_seg = time.perf_counter()
 
     import torch
     from PIL import Image
@@ -1288,6 +1349,9 @@ def run_recognition(
             (255, 128, 0),
             1,
         )
+    if profile_timings is not None:
+        profile_timings["mark_roi_tiles"] = time.perf_counter() - t_seg
+        t_seg = time.perf_counter()
 
     # 这里沿用 main() 默认采样点（你当前工程的最佳组合）
     samples = DEFAULT_SAMPLES
@@ -1295,6 +1359,34 @@ def run_recognition(
     results: List[Dict[str, Any]] = []
     filtered_wild_top_zone: List[Dict[str, Any]] = []
     with torch.no_grad():
+        tops_stage1_all: Optional[List[List[Tuple[str, float]]]] = None
+        if batch_embed and cross_bar_stage1_batch_embed and len(boxes) > 0:
+            t_pf0 = time.perf_counter()
+            bar_stage1_flat_bgrs: List[np.ndarray] = []
+            for bi, (x, y, w, h) in enumerate(boxes):
+                base_cx = x + w // 2 + CENTER_OFFSET_X
+                base_cy = y + h
+                for si, (dx, dy) in enumerate(samples):
+                    cx = int(base_cx + dx)
+                    cy = int(base_cy + dy)
+                    bgra = _crop_circle_bgra(scene, cx, cy, r)
+                    if alpha_tight:
+                        bgra = _tight_crop_by_alpha(bgra, alpha_thresh=int(alpha_thresh), pad=2)
+                    bgr = _bgra_to_bgr_white(bgra)
+                    if save_debug_crops:
+                        crop_path = crops_dir / f"bar{bi+1:02d}_stage1_s{si+1:02d}_{dx}_{dy}.png"
+                        ok, buf = cv2.imencode(".png", bgra)
+                        if ok:
+                            Path(crop_path).write_bytes(buf.tobytes())
+                    bar_stage1_flat_bgrs.append(bgr)
+            tops_stage1_all = (
+                _embed_batch_topk(model, transform, device, bar_stage1_flat_bgrs, db_names, db_mat, topk=5)
+                if bar_stage1_flat_bgrs
+                else []
+            )
+            if profile_timings is not None:
+                profile_timings["prefetch_cross_bar_stage1"] = time.perf_counter() - t_pf0
+
         for bi, (x, y, w, h) in enumerate(boxes):
             # 先保存画布快照；若后续判定为“应丢弃”，回滚掉这条的框/圈，避免残留可视化噪声。
             mark_before = mark.copy()
@@ -1307,57 +1399,141 @@ def run_recognition(
             per_samples: List[Dict[str, Any]] = []
             used_samples = 0
 
-            for si, (dx, dy) in enumerate(samples):
-                cx = int(base_cx + dx)
-                cy = int(base_cy + dy)
-                cv2.circle(mark, (cx, cy), 2, (0, 0, 255), -1)
-                cv2.circle(mark, (cx, cy), r, (0, 255, 255), 2)
+            if batch_embed:
+                if cross_bar_stage1_batch_embed and tops_stage1_all is not None:
+                    n_s = len(samples)
+                    tops1 = tops_stage1_all[bi * n_s : (bi + 1) * n_s]
+                    for si, (dx, dy) in enumerate(samples):
+                        cx = int(base_cx + dx)
+                        cy = int(base_cy + dy)
+                        cv2.circle(mark, (cx, cy), 2, (0, 0, 255), -1)
+                        cv2.circle(mark, (cx, cy), r, (0, 255, 255), 2)
+                        top = tops1[si]
+                        per_samples.append({"dx": dx, "dy": dy, "top": top})
+                        if not top:
+                            continue
 
-                bgra = _crop_circle_bgra(scene, cx, cy, r)
-                if alpha_tight:
-                    bgra = _tight_crop_by_alpha(bgra, alpha_thresh=int(alpha_thresh), pad=2)
-                bgr = _bgra_to_bgr_white(bgra)
-                crop_path = crops_dir / f"bar{bi+1:02d}_stage1_s{si+1:02d}_{dx}_{dy}.png"
-                ok, buf = cv2.imencode(".png", bgra)
-                if ok:
-                    Path(crop_path).write_bytes(buf.tobytes())
+                        top_for_filter = _collapse_topk_to_hero(top)
+                        if not top_for_filter:
+                            continue
+                        top1_name, top1_sim = top_for_filter[0]
+                        top2_sim = float(top_for_filter[1][1]) if len(top_for_filter) >= 2 else -1.0
+                        margin = float(top1_sim) - float(top2_sim)
+                        if float(top1_sim) < float(sample_min_sim) or margin < float(sample_min_margin):
+                            continue
 
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                xt = transform(Image.fromarray(rgb)).unsqueeze(0).to(device)
-                q = model(xt).detach().cpu().numpy().flatten().astype(np.float32)
-                q = q / (np.linalg.norm(q) + 1e-8)
+                        used_samples += 1
+                        votes[top1_name] = votes.get(top1_name, 0) + 1
 
-                # embedding-only
-                top = _topk_cosine(q, db_names, db_mat, topk=5)
-                # 记录 raw top（便于 debug），但用于聚合/投票的 top 会按英雄名合并
-                per_samples.append({"dx": dx, "dy": dy, "top": top})
-                if not top:
-                    continue
+                        topm = max(1, int(sample_topm))
+                        top_hero = _collapse_topk_to_hero(top)
+                        use = top_hero[:topm]
+                        sims = np.array([s for _, s in use], dtype=np.float32)
+                        t = float(temp)
+                        z = (sims - float(np.max(sims))) / max(1e-6, t)
+                        ez = np.exp(z)
+                        probs = ez / float(np.sum(ez))
+                        for (name, _sim), pprob in zip(use, probs):
+                            agg[name] = agg.get(name, 0.0) + float(pprob)
+                else:
+                    bgrs1: List[np.ndarray] = []
+                    for si, (dx, dy) in enumerate(samples):
+                        cx = int(base_cx + dx)
+                        cy = int(base_cy + dy)
+                        cv2.circle(mark, (cx, cy), 2, (0, 0, 255), -1)
+                        cv2.circle(mark, (cx, cy), r, (0, 255, 255), 2)
 
-                # 单点过滤：embedding-only
-                top_for_filter = _collapse_topk_to_hero(top)
-                if not top_for_filter:
-                    continue
-                top1_name, top1_sim = top_for_filter[0]
-                top2_sim = float(top_for_filter[1][1]) if len(top_for_filter) >= 2 else -1.0
-                margin = float(top1_sim) - float(top2_sim)
-                if float(top1_sim) < float(sample_min_sim) or margin < float(sample_min_margin):
-                    continue
+                        bgra = _crop_circle_bgra(scene, cx, cy, r)
+                        if alpha_tight:
+                            bgra = _tight_crop_by_alpha(bgra, alpha_thresh=int(alpha_thresh), pad=2)
+                        bgr = _bgra_to_bgr_white(bgra)
+                        crop_path = crops_dir / f"bar{bi+1:02d}_stage1_s{si+1:02d}_{dx}_{dy}.png"
+                        if save_debug_crops:
+                            ok, buf = cv2.imencode(".png", bgra)
+                            if ok:
+                                Path(crop_path).write_bytes(buf.tobytes())
+                        bgrs1.append(bgr)
+                    tops1 = _embed_batch_topk(model, transform, device, bgrs1, db_names, db_mat, topk=5)
+                    for si, (dx, dy) in enumerate(samples):
+                        top = tops1[si]
+                        per_samples.append({"dx": dx, "dy": dy, "top": top})
+                        if not top:
+                            continue
 
-                used_samples += 1
-                votes[top1_name] = votes.get(top1_name, 0) + 1
+                        top_for_filter = _collapse_topk_to_hero(top)
+                        if not top_for_filter:
+                            continue
+                        top1_name, top1_sim = top_for_filter[0]
+                        top2_sim = float(top_for_filter[1][1]) if len(top_for_filter) >= 2 else -1.0
+                        margin = float(top1_sim) - float(top2_sim)
+                        if float(top1_sim) < float(sample_min_sim) or margin < float(sample_min_margin):
+                            continue
 
-                topm = max(1, int(sample_topm))
-                # 聚合也按英雄合并，避免同英雄变体分票
-                top_hero = _collapse_topk_to_hero(top)
-                use = top_hero[:topm]
-                sims = np.array([s for _, s in use], dtype=np.float32)
-                t = float(temp)
-                z = (sims - float(np.max(sims))) / max(1e-6, t)
-                ez = np.exp(z)
-                probs = ez / float(np.sum(ez))
-                for (name, _sim), pprob in zip(use, probs):
-                    agg[name] = agg.get(name, 0.0) + float(pprob)
+                        used_samples += 1
+                        votes[top1_name] = votes.get(top1_name, 0) + 1
+
+                        topm = max(1, int(sample_topm))
+                        top_hero = _collapse_topk_to_hero(top)
+                        use = top_hero[:topm]
+                        sims = np.array([s for _, s in use], dtype=np.float32)
+                        t = float(temp)
+                        z = (sims - float(np.max(sims))) / max(1e-6, t)
+                        ez = np.exp(z)
+                        probs = ez / float(np.sum(ez))
+                        for (name, _sim), pprob in zip(use, probs):
+                            agg[name] = agg.get(name, 0.0) + float(pprob)
+            else:
+                for si, (dx, dy) in enumerate(samples):
+                    cx = int(base_cx + dx)
+                    cy = int(base_cy + dy)
+                    cv2.circle(mark, (cx, cy), 2, (0, 0, 255), -1)
+                    cv2.circle(mark, (cx, cy), r, (0, 255, 255), 2)
+
+                    bgra = _crop_circle_bgra(scene, cx, cy, r)
+                    if alpha_tight:
+                        bgra = _tight_crop_by_alpha(bgra, alpha_thresh=int(alpha_thresh), pad=2)
+                    bgr = _bgra_to_bgr_white(bgra)
+                    crop_path = crops_dir / f"bar{bi+1:02d}_stage1_s{si+1:02d}_{dx}_{dy}.png"
+                    ok, buf = cv2.imencode(".png", bgra)
+                    if ok:
+                        Path(crop_path).write_bytes(buf.tobytes())
+
+                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                    xt = transform(Image.fromarray(rgb)).unsqueeze(0).to(device)
+                    q = model(xt).detach().cpu().numpy().flatten().astype(np.float32)
+                    q = q / (np.linalg.norm(q) + 1e-8)
+
+                    # embedding-only
+                    top = _topk_cosine(q, db_names, db_mat, topk=5)
+                    # 记录 raw top（便于 debug），但用于聚合/投票的 top 会按英雄名合并
+                    per_samples.append({"dx": dx, "dy": dy, "top": top})
+                    if not top:
+                        continue
+
+                    # 单点过滤：embedding-only
+                    top_for_filter = _collapse_topk_to_hero(top)
+                    if not top_for_filter:
+                        continue
+                    top1_name, top1_sim = top_for_filter[0]
+                    top2_sim = float(top_for_filter[1][1]) if len(top_for_filter) >= 2 else -1.0
+                    margin = float(top1_sim) - float(top2_sim)
+                    if float(top1_sim) < float(sample_min_sim) or margin < float(sample_min_margin):
+                        continue
+
+                    used_samples += 1
+                    votes[top1_name] = votes.get(top1_name, 0) + 1
+
+                    topm = max(1, int(sample_topm))
+                    # 聚合也按英雄合并，避免同英雄变体分票
+                    top_hero = _collapse_topk_to_hero(top)
+                    use = top_hero[:topm]
+                    sims = np.array([s for _, s in use], dtype=np.float32)
+                    t = float(temp)
+                    z = (sims - float(np.max(sims))) / max(1e-6, t)
+                    ez = np.exp(z)
+                    probs = ez / float(np.sum(ez))
+                    for (name, _sim), pprob in zip(use, probs):
+                        agg[name] = agg.get(name, 0.0) + float(pprob)
 
             agg_sorted = sorted(agg.items(), key=lambda x: -x[1])[:5]
             best = agg_sorted[0][0] if agg_sorted else None
@@ -1388,53 +1564,100 @@ def run_recognition(
                 per_samples2: List[Dict[str, Any]] = []
                 used_samples2 = 0
 
-                for si, (dx, dy) in enumerate(samples2):
-                    cx = int(base_cx + dx)
-                    cy = int(base_cy + dy)
-                    bgra = _crop_circle_bgra(scene, cx, cy, r)
-                    if alpha_tight:
-                        bgra = _tight_crop_by_alpha(bgra, alpha_thresh=int(alpha_thresh), pad=2)
-                    bgr = _bgra_to_bgr_white(bgra)
-                    crop_path = crops_dir / f"bar{bi+1:02d}_stage2_s{si+1:02d}_{dx}_{dy}.png"
-                    ok, buf = cv2.imencode(".png", bgra)
-                    if ok:
-                        Path(crop_path).write_bytes(buf.tobytes())
+                if batch_embed:
+                    bgrs2: List[np.ndarray] = []
+                    for si, (dx, dy) in enumerate(samples2):
+                        cx = int(base_cx + dx)
+                        cy = int(base_cy + dy)
+                        bgra = _crop_circle_bgra(scene, cx, cy, r)
+                        if alpha_tight:
+                            bgra = _tight_crop_by_alpha(bgra, alpha_thresh=int(alpha_thresh), pad=2)
+                        bgr = _bgra_to_bgr_white(bgra)
+                        crop_path = crops_dir / f"bar{bi+1:02d}_stage2_s{si+1:02d}_{dx}_{dy}.png"
+                        if save_debug_crops:
+                            ok, buf = cv2.imencode(".png", bgra)
+                            if ok:
+                                Path(crop_path).write_bytes(buf.tobytes())
+                        bgrs2.append(bgr)
+                    tops2 = _embed_batch_topk(model, transform, device, bgrs2, db_names, db_mat, topk=5)
+                    for si, (dx, dy) in enumerate(samples2):
+                        top = tops2[si]
+                        per_samples2.append({"dx": dx, "dy": dy, "top": top})
+                        if not top:
+                            continue
 
-                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                    xt = transform(Image.fromarray(rgb)).unsqueeze(0).to(device)
-                    q = model(xt).detach().cpu().numpy().flatten().astype(np.float32)
-                    q = q / (np.linalg.norm(q) + 1e-8)
+                        top_for_filter = _collapse_topk_to_hero(top)
+                        if not top_for_filter:
+                            continue
+                        top1_name, top1_sim = top_for_filter[0]
+                        top2_sim = float(top_for_filter[1][1]) if len(top_for_filter) >= 2 else -1.0
+                        margin = float(top1_sim) - float(top2_sim)
+                        if float(top1_sim) < float(stage2_min_sim) or margin < float(stage2_min_margin):
+                            continue
 
-                    # embedding-only
-                    top = _topk_cosine(q, db_names, db_mat, topk=5)
-                    per_samples2.append({"dx": dx, "dy": dy, "top": top})
-                    if not top:
-                        continue
+                        used_samples2 += 1
+                        votes2[top1_name] = votes2.get(top1_name, 0) + 1
+                        top1_sum2[top1_name] = top1_sum2.get(top1_name, 0.0) + float(top1_sim)
+                        top1_max2[top1_name] = max(top1_max2.get(top1_name, -1.0), float(top1_sim))
 
-                    top_for_filter = _collapse_topk_to_hero(top)
-                    if not top_for_filter:
-                        continue
-                    top1_name, top1_sim = top_for_filter[0]
-                    top2_sim = float(top_for_filter[1][1]) if len(top_for_filter) >= 2 else -1.0
-                    margin = float(top1_sim) - float(top2_sim)
-                    if float(top1_sim) < float(stage2_min_sim) or margin < float(stage2_min_margin):
-                        continue
+                        topm = max(1, int(sample_topm))
+                        top_hero = _collapse_topk_to_hero(top)
+                        use = top_hero[:topm]
+                        sims = np.array([s for _, s in use], dtype=np.float32)
+                        t = float(temp)
+                        z = (sims - float(np.max(sims))) / max(1e-6, t)
+                        ez = np.exp(z)
+                        probs = ez / float(np.sum(ez))
+                        for (name, _sim), pprob in zip(use, probs):
+                            agg2[name] = agg2.get(name, 0.0) + float(pprob)
+                else:
+                    for si, (dx, dy) in enumerate(samples2):
+                        cx = int(base_cx + dx)
+                        cy = int(base_cy + dy)
+                        bgra = _crop_circle_bgra(scene, cx, cy, r)
+                        if alpha_tight:
+                            bgra = _tight_crop_by_alpha(bgra, alpha_thresh=int(alpha_thresh), pad=2)
+                        bgr = _bgra_to_bgr_white(bgra)
+                        crop_path = crops_dir / f"bar{bi+1:02d}_stage2_s{si+1:02d}_{dx}_{dy}.png"
+                        ok, buf = cv2.imencode(".png", bgra)
+                        if ok:
+                            Path(crop_path).write_bytes(buf.tobytes())
 
-                    used_samples2 += 1
-                    votes2[top1_name] = votes2.get(top1_name, 0) + 1
-                    top1_sum2[top1_name] = top1_sum2.get(top1_name, 0.0) + float(top1_sim)
-                    top1_max2[top1_name] = max(top1_max2.get(top1_name, -1.0), float(top1_sim))
+                        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                        xt = transform(Image.fromarray(rgb)).unsqueeze(0).to(device)
+                        q = model(xt).detach().cpu().numpy().flatten().astype(np.float32)
+                        q = q / (np.linalg.norm(q) + 1e-8)
 
-                    topm = max(1, int(sample_topm))
-                    top_hero = _collapse_topk_to_hero(top)
-                    use = top_hero[:topm]
-                    sims = np.array([s for _, s in use], dtype=np.float32)
-                    t = float(temp)
-                    z = (sims - float(np.max(sims))) / max(1e-6, t)
-                    ez = np.exp(z)
-                    probs = ez / float(np.sum(ez))
-                    for (name, _sim), pprob in zip(use, probs):
-                        agg2[name] = agg2.get(name, 0.0) + float(pprob)
+                        # embedding-only
+                        top = _topk_cosine(q, db_names, db_mat, topk=5)
+                        per_samples2.append({"dx": dx, "dy": dy, "top": top})
+                        if not top:
+                            continue
+
+                        top_for_filter = _collapse_topk_to_hero(top)
+                        if not top_for_filter:
+                            continue
+                        top1_name, top1_sim = top_for_filter[0]
+                        top2_sim = float(top_for_filter[1][1]) if len(top_for_filter) >= 2 else -1.0
+                        margin = float(top1_sim) - float(top2_sim)
+                        if float(top1_sim) < float(stage2_min_sim) or margin < float(stage2_min_margin):
+                            continue
+
+                        used_samples2 += 1
+                        votes2[top1_name] = votes2.get(top1_name, 0) + 1
+                        top1_sum2[top1_name] = top1_sum2.get(top1_name, 0.0) + float(top1_sim)
+                        top1_max2[top1_name] = max(top1_max2.get(top1_name, -1.0), float(top1_sim))
+
+                        topm = max(1, int(sample_topm))
+                        top_hero = _collapse_topk_to_hero(top)
+                        use = top_hero[:topm]
+                        sims = np.array([s for _, s in use], dtype=np.float32)
+                        t = float(temp)
+                        z = (sims - float(np.max(sims))) / max(1e-6, t)
+                        ez = np.exp(z)
+                        probs = ez / float(np.sum(ez))
+                        for (name, _sim), pprob in zip(use, probs):
+                            agg2[name] = agg2.get(name, 0.0) + float(pprob)
 
                 agg2_sorted = sorted(agg2.items(), key=lambda x: -x[1])[:5]
 
@@ -1759,6 +1982,10 @@ def run_recognition(
             else:
                 cv2.putText(mark, "?", (x, max(0, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
 
+    if profile_timings is not None:
+        profile_timings["torch_bar_loop"] = time.perf_counter() - t_seg
+        t_seg = time.perf_counter()
+
     # 输出阶段补充棋盘格定位（基于本文件内置参数）
     if results:
         cells = _board_cells()
@@ -1808,6 +2035,10 @@ def run_recognition(
             _draw_chinese_text(mark, pos_label, (bx, max(0, by - 40)), font_size=14, color=(120, 255, 120))
             cv2.circle(mark, (int(round(ax)), int(round(ay))), 3, (120, 255, 120), -1)
 
+    if profile_timings is not None:
+        profile_timings["position_mapping"] = time.perf_counter() - t_seg
+        t_seg = time.perf_counter()
+
     mark_path = output_dir / f"{img_path.stem}_多点Embedding_标记.png"
     _save_image(mark, mark_path)
 
@@ -1829,6 +2060,9 @@ def run_recognition(
         "filtered_wild_top_zone": filtered_wild_top_zone,
     }
     (output_dir / "result.json").write_text(json.dumps(out_json, ensure_ascii=False, indent=2), encoding="utf-8")
+    if profile_timings is not None:
+        profile_timings["save_outputs"] = time.perf_counter() - t_seg
+        profile_timings["total"] = time.perf_counter() - t_prof0
     return out_json
 
 

@@ -1,0 +1,21 @@
+{
+  "img_dir": "D:\\随风听笛5\\对局截图",
+  "out_root": "D:\\随风听笛5\\battle_pipeline_v3_out",
+  "images": [
+    "01-a.png",
+    "01-b.png",
+    "02-a.png",
+    "02-b.png",
+    "03-a.png",
+    "03-b.png",
+    "04-a.png",
+    "04-b.png"
+  ],
+  "groups": [
+    "01",
+    "02",
+    "03",
+    "04"
+  ],
+  "fightboard_stem_suffix": "a"
+}

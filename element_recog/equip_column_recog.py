@@ -22,13 +22,20 @@ import argparse
 import csv
 import shutil
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 import cv2
 import numpy as np
 
-from bars_recog import iter_input_images
-import equip_recog as er
+try:
+    from element_recog import equip_recog as er
+except ImportError:
+    import equip_recog as er  # type: ignore
+
+try:
+    from .bars_recog import iter_input_images
+except ImportError:
+    from bars_recog import iter_input_images  # type: ignore
 
 # 本文件位于 element_recog/ 时，工程根为上一级（对局截图、equip_gallery、默认可写输出仍在项目根）
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -251,6 +258,151 @@ def _apply_spatula_special_case(
         if Path(cand[3]).stem == "秘法手套":
             return [cand]
     return picked
+
+
+def compute_equip_column_matches(
+    scene_bgr: np.ndarray,
+    *,
+    templates: List[Tuple[str, np.ndarray]],
+    equip_roi: Tuple[int, int, int, int] = DEFAULT_EQUIP_ROI,
+    scales: Sequence[int] = (60, 61, 62, 63, 64),
+    threshold: float = 0.6,
+    max_peaks_per_scale: int = 4,
+    top_k: int = 15,
+    nms_iou: float = 0.35,
+    blue_buff_gap_min: float = 0.05,
+    blue_buff_single_min_score: float = 0.78,
+    grid_cols: int = 2,
+    grid_rows: int = 10,
+) -> Dict[str, Any]:
+    """
+    在整图 BGR 上识别左侧装备栏竖条 ROI，返回结构化结果（供 pipeline 写 JSON / 再叠加绘制）。
+    """
+    x1, y1, x2, y2 = equip_roi
+    H, W = scene_bgr.shape[:2]
+    rx1 = max(0, min(int(x1), W))
+    ry1 = max(0, min(int(y1), H))
+    rx2 = max(0, min(int(x2), W))
+    ry2 = max(0, min(int(y2), H))
+    out_matches: List[Dict[str, Any]] = []
+    if rx2 <= rx1 or ry2 <= ry1:
+        return {"equip_roi": [rx1, ry1, rx2, ry2], "matches": [], "match_count": 0}
+
+    scales_t = tuple(int(s) for s in scales if int(s) >= 2)
+    if not scales_t:
+        return {"equip_roi": [rx1, ry1, rx2, ry2], "matches": [], "match_count": 0}
+    min_roi = max(scales_t)
+    thr = float(threshold)
+    max_peaks = int(max_peaks_per_scale)
+    tk = int(top_k)
+    method = cv2.TM_CCOEFF_NORMED
+    gc = max(1, int(grid_cols))
+    gr = max(1, int(grid_rows))
+
+    blocks = _split_roi_grid(rx1, ry1, rx2, ry2, cols=gc, rows=gr)
+    for block_idx, bx1, by1, bx2, by2 in blocks:
+        roi_crop = scene_bgr[by1:by2, bx1:bx2].copy()
+        roi_g = er._to_gray(roi_crop)
+        if roi_g.shape[1] < min_roi or roi_g.shape[0] < min_roi:
+            continue
+
+        candidates: List[Tuple[float, int, int, str, int]] = []
+        for name, tmpl_gray in templates:
+            peaks = er._collect_peaks_for_template(
+                roi_g,
+                tmpl_gray,
+                scales_t,
+                method,
+                thr,
+                max_peaks,
+            )
+            for score, x, y, side_win in peaks:
+                candidates.append((score, x, y, name, side_win))
+
+        if not candidates:
+            continue
+
+        candidates.sort(key=lambda t: float(t[0]), reverse=True)
+        boxes_xy = [(c[1], c[2], c[4], c[4]) for c in candidates]
+        scores = [float(c[0]) for c in candidates]
+        keep_idx = er._nms_xywh(boxes_xy, scores, nms_iou) if candidates else []
+        picked = [candidates[i] for i in keep_idx[:tk]]
+        picked = _apply_blue_buff_special_case(
+            picked,
+            gap_min=blue_buff_gap_min,
+            single_min_score=blue_buff_single_min_score,
+        )
+        picked = er._apply_spatula_special_case(picked)
+
+        region_index = block_idx + 1
+        for rank, (score, x, y, tname, side_win) in enumerate(picked, start=1):
+            gx1 = bx1 + int(x)
+            gy1 = by1 + int(y)
+            stem_l = er._equip_label_stem(tname)
+            out_matches.append(
+                {
+                    "template_file": str(tname),
+                    "name_stem": str(stem_l),
+                    "score": float(score),
+                    "global_x": int(gx1),
+                    "global_y": int(gy1),
+                    "side": int(side_win),
+                    "roi_index": int(region_index),
+                    "rank_in_block": int(rank),
+                }
+            )
+
+    return {
+        "equip_roi": [rx1, ry1, rx2, ry2],
+        "matches": out_matches,
+        "match_count": len(out_matches),
+    }
+
+
+def draw_equip_column_matches_on_bgr(
+    base_bgr: np.ndarray,
+    matches: Sequence[Dict[str, Any]],
+    *,
+    equip_roi: Tuple[int, int, int, int],
+    draw_roi_box: bool = True,
+    label_font_size: int = 12,
+    max_label_chars: int = 14,
+) -> np.ndarray:
+    """在已与 scene 对齐的底图（如 fightboard 叠加图）上绘制装备栏匹配框与标签。"""
+    vis = base_bgr.copy()
+    Hv, Wv = vis.shape[:2]
+    x1, y1, x2, y2 = equip_roi
+    rx1 = max(0, min(int(x1), Wv))
+    ry1 = max(0, min(int(y1), Hv))
+    rx2 = max(0, min(int(x2), Wv))
+    ry2 = max(0, min(int(y2), Hv))
+    if draw_roi_box and rx2 > rx1 and ry2 > ry1:
+        cv2.rectangle(vis, (rx1, ry1), (rx2, ry2), (128, 128, 255), 2)
+
+    for m in matches:
+        gx1 = int(m.get("global_x") or 0)
+        gy1 = int(m.get("global_y") or 0)
+        side_win = int(m.get("side") or 0)
+        score = float(m.get("score") or 0.0)
+        stem_l = str(m.get("name_stem") or "").strip() or "?"
+        if len(stem_l) > max_label_chars:
+            stem_l = stem_l[: max_label_chars - 1] + "…"
+        if side_win <= 0:
+            continue
+        cv2.rectangle(vis, (gx1, gy1), (gx1 + side_win, gy1 + side_win), (0, 255, 0), 1)
+        label = f"{stem_l} {score:.2f}"
+        text_y = gy1 - 4
+        if text_y < label_font_size + 2:
+            text_y = min(Hv - 2, gy1 + side_win + label_font_size + 2)
+        text_x = max(0, min(gx1, Wv - 1))
+        er._draw_chinese_text(
+            vis,
+            label,
+            (text_x, text_y),
+            font_size=max(8, int(label_font_size)),
+            color=(0, 255, 0),
+        )
+    return vis
 
 
 def main() -> None:
