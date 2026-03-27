@@ -1,2 +1,14 @@
 # battle_ui_ocr 专用虚拟环境（由 run_battle_ui_ocr 自动创建）
 .venv_battle_ocr/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 流水线缓存与本地输出目录
+.pipeline_cache/
+.pipeline_v2_cache/
+battle_pipeline_v3_out/
+tcv_info/
+fightboard_info_v2/*.json

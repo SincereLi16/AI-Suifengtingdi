@@ -3,6 +3,10 @@
 trait_cross_validate：按对局编号聚合 player 羁绊，并与 fightboard 做交叉验证。
 
 默认单链路：对 --img-dir 内图片依次跑 fightboard + player（不跑备战席），再自动比对输出；也可 --from-json。
+--from-json 时默认读 player_info_onnx 与 fightboard_info_v2 下 JSON，按组号对齐主图棋盘与 Player 羁绊。
+默认输出目录为项目根下 ``tcv_info/``；默认写出 ``tcv_summary.json``（仅含四段摘要：羁绊栏、场上棋子+羁绊、是否一致、建议组合）；可用 ``--no-tcv-summary`` 关闭。
+羁绊不一致时默认 --greedy-fix-mode=low_or_mismatch：无 confidence==low 时在 agg_top/vote_top 内对全盘贪心换名。
+若候选换名仍无法降低 trait_loss（mismatch_greedy_not_helped），对可编辑条打上 trait_cv_suspect，并在 suspect_bar_indices 列出 bar_index。
 
 1) 01-a / 01-b 等同组聚合羁绊；--fightboard-stem-suffix a 时对主图做棋盘验证。
 2) 棋盘羁绊 = 英雄固有（rag_legend_chess）+ 装备赐羁绊（rag_legend_equip）；低置信棋子可贪心替换。
@@ -27,8 +31,11 @@ import numpy as np
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CV_IMG_DIR = PROJECT_DIR / "测试集" / "交叉验证组"
-DEFAULT_CV_OUT_DIR = PROJECT_DIR / "测试集" / "交叉验证组_cv_out"
+DEFAULT_CV_OUT_DIR = PROJECT_DIR / "tcv_info"
 CACHE_SCHEMA_VERSION = "tcv_recog_v1"
+
+# 贪心在 agg_top/vote_top 内换名仍无法降低 trait_loss 时，在 confirmed_results 条目标记 trait_cv_suspect
+TRAIT_CV_SUSPECT_REASON_GREEDY_EXHAUSTED = "greedy_exhausted_no_candidate_reduces_trait_loss"
 
 _CHESS_TRAITS_BY_PATH: Dict[str, Dict[str, List[str]]] = {}
 _EQUIP_GRANTS_BY_PATH: Dict[str, Dict[str, List[str]]] = {}
@@ -37,6 +44,122 @@ _LEGEND_TRAIT_NAMES_BY_PATH: Dict[str, Set[str]] = {}
 
 # 装备描述中「赐予」额外羁绊的片段（转职纹章、暗裔神器等）
 _GRANT_TRAIT_FROM_EQUIP_RE = re.compile(r"(?:携带者)?获得【([^】]+)】羁绊")
+
+
+def _tcv_iter_images(path: Path) -> List[Path]:
+    """与旧 battle_pipeline 一致：目录内常见图像后缀。"""
+    exts = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+    if path.is_file():
+        return [path]
+    if not path.is_dir():
+        raise SystemExit(f"输入路径不存在: {path}")
+    files = [p for p in sorted(path.iterdir()) if p.is_file() and p.suffix.lower() in exts]
+    if not files:
+        raise SystemExit(f"输入目录内无图像: {path}")
+    return files
+
+
+def _tcv_save_image(path: Path, bgr: np.ndarray) -> None:
+    ok, buf = cv2.imencode(".png", bgr)
+    if not ok:
+        raise RuntimeError(f"图片编码失败: {path}")
+    path.write_bytes(buf.tobytes())
+
+
+def _tcv_draw_text_panel(base: np.ndarray, lines: List[str]) -> np.ndarray:
+    """右侧中文摘要面板（依赖 PIL 时优先渲染中文）。"""
+    h, w = base.shape[:2]
+    panel_w = max(620, int(w * 0.42))
+    panel = np.zeros((h, panel_w, 3), dtype=np.uint8)
+    cv2.rectangle(panel, (0, 0), (panel_w - 1, h - 1), (90, 90, 90), 1)
+    cv2.putText(panel, "TCV Summary", (14, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        font = None
+        for fp in (Path(r"C:\Windows\Fonts\msyh.ttc"), Path(r"C:\Windows\Fonts\simhei.ttf")):
+            if fp.exists():
+                try:
+                    font = ImageFont.truetype(str(fp), 18)
+                    break
+                except Exception:
+                    continue
+        if font is None:
+            font = ImageFont.load_default()
+        rgb = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
+        pil = Image.fromarray(rgb)
+        dr = ImageDraw.Draw(pil)
+        y = 58
+        for ln in lines:
+            if y > h - 10:
+                break
+            dr.text((12, y), ln, font=font, fill=(255, 255, 255))
+            y += 23
+        panel = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+    except Exception:
+        y = 58
+        for ln in lines:
+            if y > h - 10:
+                break
+            cv2.putText(panel, ln[:120], (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+            y += 23
+    return np.hstack([base, panel])
+
+
+def _tcv_run_one_fightboard(
+    *,
+    project_root: Path,
+    image_path: Path,
+    template: Any,
+    model: Any,
+    device: Any,
+    transform: Any,
+    piece_db: Any,
+    equip_templates: Any,
+    scales: List[int],
+    min_roi: int,
+    temp_out: Path,
+) -> Dict[str, Any]:
+    """仅 fightboard + 装备条：不依赖 battle_pipeline / preboard。"""
+    import fightboard_recog as fb
+
+    scene_bgr = fb.cr._load_image(image_path)
+    out_json = fb.cr.run_recognition(
+        image_path=image_path,
+        template_path=template,
+        piece_dir=project_root / "chess_gallery",
+        output_dir=temp_out,
+        circle_diameter=84,
+        model=model,
+        device=device,
+        transform=transform,
+        piece_db=piece_db,
+        alpha_tight=True,
+    )
+    results = out_json.get("results") or []
+    equip_by_bar: Dict[int, List[Dict[str, Any]]] = {}
+    for r in results:
+        bi = int(r.get("bar_index") or 0)
+        bar_box = r.get("bar_box") or [0, 0, 0, 0]
+        equip_by_bar[bi] = fb._detect_one_bar_equip(
+            scene_bgr,
+            bar_box_xywh=bar_box,
+            templates=equip_templates,
+            scales=scales,
+            method=cv2.TM_CCOEFF_NORMED,
+            threshold=0.78,
+            max_peaks_per_scale=4,
+            top_k=15,
+            nms_iou=0.35,
+            below_px=2,
+            crop_w=120,
+            crop_h=50,
+            min_roi=min_roi,
+            blue_buff_gap_min=0.05,
+            label_topn=3,
+        )
+    vis = fb._overlay_fightboard(scene_bgr=scene_bgr, results=results, equip_by_bar=equip_by_bar, font_size=16)
+    return {"vis": vis, "summary": {"file": image_path.name, "results": results, "equip_by_bar": equip_by_bar}}
 
 
 def _read_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -336,6 +459,24 @@ def _trait_counts_emblems_only(
     return dict(c)
 
 
+def _merge_bond_expected_with_emblem_grants(
+    bond_trait_max: Dict[str, int],
+    emblem_only_counts: Dict[str, int],
+) -> Dict[str, int]:
+    """
+    TCV 用的「期望」羁绊人数：羁绊栏 bond_items 聚合得到的 trait_count_max，
+    再加上场上血条下识别到的纹章/装备赐羁绊（与 _trait_counts_from_board 中装备块同源）。
+
+    棋盘侧 board_trait_counts = 棋子固有羁绊 + 装备赐羁绊；羁绊栏 OCR 往往只反映「羁绊面板」上的
+    棋子贡献，不含或不全含纹章额外人数，故将 emblem_only 加到期望侧，与棋盘口径对齐。
+    """
+    keys = set(bond_trait_max.keys()) | set(emblem_only_counts.keys())
+    out: Dict[str, int] = {}
+    for k in keys:
+        out[k] = int(bond_trait_max.get(k, 0)) + int(emblem_only_counts.get(k, 0))
+    return out
+
+
 def _emblem_audit_rows(
     results: List[Dict[str, Any]],
     equip_by_bar: Any,
@@ -565,8 +706,6 @@ def _save_primary_annotated_png(
     cv: Dict[str, Any],
 ) -> None:
     """主图 a：左侧 fightboard 标注 + 右侧文字（聚合羁绊、分图 player 结构、棋盘列表、交叉验证）。"""
-    import battle_pipeline as bp
-
     lines: List[str] = []
     lines.append("trait_cross_validate · 主图汇总")
     lines.append("")
@@ -586,9 +725,9 @@ def _save_primary_annotated_png(
     lines.append("【羁绊 vs 棋盘一致性】")
     lines.extend(_cv_analysis_lines(cv))
 
-    panel = bp._draw_text_panel(fight_vis, lines)
+    panel = _tcv_draw_text_panel(fight_vis, lines)
     out_dir.mkdir(parents=True, exist_ok=True)
-    bp._save_image(out_dir / f"{stem}_tcv_annotated.png", panel)
+    _tcv_save_image(out_dir / f"{stem}_tcv_annotated.png", panel)
 
 
 def _file_sha1(path: Path) -> str:
@@ -648,14 +787,20 @@ def _run_cross_validate_outputs(
     legend_traits: Path,
     fightboard_source: str = "json",
     primary_fight_vis_by_stem: Optional[Dict[str, Any]] = None,
+    greedy_fix_mode: str = "low_or_mismatch",
+    tcv_summary_path: Optional[Path] = None,
+    write_tcv_summary: bool = True,
+    tcv_summary_sources: Optional[Dict[str, str]] = None,
 ) -> None:
-    """对 fight_by_stem 中主图 stem 写 group_traits / confirmed_fightboard；recognition 模式可附主图 fight vis 写 PNG。"""
+    """对 fight_by_stem 中主图 stem 写 group_traits / confirmed_fightboard；可选 tcv_summary.json。"""
     out_root.mkdir(parents=True, exist_ok=True)
     group_out = out_root / "group_traits"
     confirmed_out = out_root / "confirmed_fightboard"
     annotated_dir = out_root / "primary_annotated"
     group_out.mkdir(parents=True, exist_ok=True)
     confirmed_out.mkdir(parents=True, exist_ok=True)
+    chess_for_summary = _load_chess_name_to_traits(legend_chess.resolve())
+    tcv_records: List[Dict[str, Any]] = []
 
     for gk, agg in sorted(group_traits_map.items(), key=lambda kv: kv[0]):
         (group_out / f"{gk}_group_traits.json").write_text(
@@ -697,6 +842,7 @@ def _run_cross_validate_outputs(
             legend_chess_path=legend_chess.resolve(),
             legend_traits_path=legend_traits.resolve(),
             legend_equip_path=legend_equip.resolve(),
+            greedy_fix_mode=greedy_fix_mode,
         )
         _print_terminal_report(
             group=gk,
@@ -720,6 +866,17 @@ def _run_cross_validate_outputs(
             encoding="utf-8",
         )
         print(f"[OK] confirmed -> {stem}_confirmed_fightboard.json")
+        tcv_records.append(
+            _build_tcv_summary_record(
+                group=gk,
+                fight_stem=stem,
+                fight_file=src_name,
+                group_traits=group_traits,
+                fight_js=fight_js,
+                cv=cv,
+                chess=chess_for_summary,
+            )
+        )
         if primary_fight_vis_by_stem and stem in primary_fight_vis_by_stem:
             vis = primary_fight_vis_by_stem.get(stem)
             if vis is not None:
@@ -742,6 +899,19 @@ def _run_cross_validate_outputs(
         if (agg.get("per_file_bonds") or []) and not stems_in_group:
             print(f"[WARN] 组 {gk} 有 player 结果但无主图 fightboard（缺 -{fightboard_stem_suffix or 'a'} 等），未做交叉验证")
 
+    if write_tcv_summary:
+        sp = tcv_summary_path if tcv_summary_path is not None else (out_root / "tcv_summary.json")
+        payload: Dict[str, Any] = {
+            "version": "tcv_summary_v1",
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+            "groups": tcv_records,
+        }
+        if tcv_summary_sources:
+            payload["sources"] = dict(tcv_summary_sources)
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[OK] tcv_summary -> {sp.resolve()}")
+
 def run_recognition_then_validate(
     *,
     img_dir: Path,
@@ -753,16 +923,18 @@ def run_recognition_then_validate(
     legend_traits: Path,
     use_cache: bool,
     cache_dir: Path,
+    greedy_fix_mode: str = "low_or_mismatch",
+    tcv_summary_path: Optional[Path] = None,
+    write_tcv_summary: bool = True,
 ) -> None:
     """单进程：主图（-a / 纯数字）跑 fightboard + player；辅图（如 -b）仅 player；再合并羁绊并与主图棋盘比对。"""
     import pickle
 
-    import battle_pipeline as bp
     import fightboard_recog as fb
     import player_recog as pr
 
-    project = bp.PROJECT_DIR
-    images = bp._iter_images(img_dir.resolve())
+    project = PROJECT_DIR
+    images = _tcv_iter_images(img_dir.resolve())
     if not images:
         raise SystemExit(f"输入目录无图像: {img_dir}")
 
@@ -892,7 +1064,8 @@ def run_recognition_then_validate(
                 if fight is None:
                     _ensure_fight_runtime()
                     assert template is not None and piece_db is not None and equip_templates is not None
-                    fight = bp._run_one_fightboard(
+                    fight = _tcv_run_one_fightboard(
+                        project_root=project,
                         image_path=used_path,
                         template=template,
                         model=model,
@@ -960,6 +1133,10 @@ def run_recognition_then_validate(
         legend_traits=legend_traits,
         fightboard_source="recognition",
         primary_fight_vis_by_stem=primary_fight_vis_by_stem or None,
+        greedy_fix_mode=greedy_fix_mode,
+        tcv_summary_path=tcv_summary_path,
+        write_tcv_summary=write_tcv_summary,
+        tcv_summary_sources={"img_dir": str(img_dir.resolve())},
     )
 
     manifest = {
@@ -1030,31 +1207,57 @@ def _candidate_names_from_result(r: Dict[str, Any], *, limit: int = 10) -> List[
     return out[:cap]
 
 
-def _greedy_fix_low_confidence(
+def _editable_indices_for_greedy_fix(
+    results: List[Dict[str, Any]],
+    *,
+    trait_loss: int,
+    mode: str,
+) -> List[int]:
+    """
+    mode:
+      low — 仅 confidence==low 的格子（与旧版一致）
+      mismatch_all — trait_loss>0 时允许调整全部格子（仅在 agg_top/vote_top 内换名）
+      low_or_mismatch — 若存在 low 则只用 low；否则当 trait_loss>0 时与 mismatch_all 相同
+    """
+    n = len(results or [])
+    low_idx = [i for i, r in enumerate(results or []) if str((r or {}).get("confidence") or "") == "low"]
+    if mode == "low":
+        return low_idx
+    if mode == "mismatch_all":
+        return list(range(n)) if trait_loss > 0 else []
+    if mode == "low_or_mismatch":
+        if low_idx:
+            return low_idx
+        return list(range(n)) if trait_loss > 0 else []
+    raise ValueError(f"unknown greedy_fix_mode: {mode!r}")
+
+
+def _greedy_fix_with_editable_indices(
     results: List[Dict[str, Any]],
     expected: Dict[str, int],
     chess: Dict[str, List[str]],
     equip_by_bar: Any,
     equip_grants: Dict[str, List[str]],
+    editable_indices: List[int],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int, int]:
     """
-    仅调整 confidence==low 的条目；贪心多轮直到无法降低 loss。
+    仅在 editable_indices 指定的条目上，于 agg_top/vote_top 候选内贪心换名以降低 trait_loss。
     返回 (新 results 深拷贝, changes, loss_before, loss_after)。
     """
     out = copy.deepcopy(results or [])
     names = _hero_names_from_results(out)
     eb = equip_by_bar
     loss_before = _trait_loss(expected, _trait_counts_from_board(names, out, eb, chess, equip_grants))
-    low_idx = [i for i, r in enumerate(out) if str((r or {}).get("confidence") or "") == "low"]
+    fix_idx = sorted({i for i in editable_indices if 0 <= i < len(out)})
     changes: List[Dict[str, Any]] = []
-    if not low_idx:
+    if not fix_idx:
         return out, changes, loss_before, loss_before
 
     loss_cur = loss_before
     improved = True
     while improved:
         improved = False
-        for i in low_idx:
+        for i in fix_idx:
             r = out[i]
             cands = _candidate_names_from_result(r)
             best_cand = names[i]
@@ -1080,7 +1283,7 @@ def _greedy_fix_low_confidence(
                         "position_label": pos_lbl,
                         "from": names[i],
                         "to": best_cand,
-                        "confidence": "low",
+                        "confidence": str((r or {}).get("confidence") or ""),
                         "trait_loss_before": loss_cur,
                         "trait_loss_after": best_l,
                     }
@@ -1093,6 +1296,18 @@ def _greedy_fix_low_confidence(
     return out, changes, loss_before, loss_cur
 
 
+def _greedy_fix_low_confidence(
+    results: List[Dict[str, Any]],
+    expected: Dict[str, int],
+    chess: Dict[str, List[str]],
+    equip_by_bar: Any,
+    equip_grants: Dict[str, List[str]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int, int]:
+    """兼容旧接口：仅 confidence==low。"""
+    low_idx = [i for i, r in enumerate(results or []) if str((r or {}).get("confidence") or "") == "low"]
+    return _greedy_fix_with_editable_indices(results, expected, chess, equip_by_bar, equip_grants, low_idx)
+
+
 def _apply_cross_validation_rules(
     *,
     fightboard_summary: Dict[str, Any],
@@ -1100,6 +1315,7 @@ def _apply_cross_validation_rules(
     legend_chess_path: Path,
     legend_traits_path: Path,
     legend_equip_path: Optional[Path] = None,
+    greedy_fix_mode: str = "low_or_mismatch",
 ) -> Dict[str, Any]:
     _ = legend_traits_path  # 预留：羁绊白名单/加权
     chess = _load_chess_name_to_traits(legend_chess_path)
@@ -1108,10 +1324,11 @@ def _apply_cross_validation_rules(
         equip_grants = _load_equip_name_to_granted_traits(legend_equip_path)
     original_results = fightboard_summary.get("results") or []
     equip_by_bar = fightboard_summary.get("equip_by_bar")
-    expected = dict(group_player_traits.get("trait_count_max") or {})
+    bond_trait_max = dict(group_player_traits.get("trait_count_max") or {})
+    emblem_only_traits = _trait_counts_emblems_only(original_results, equip_by_bar, equip_grants)
+    expected = _merge_bond_expected_with_emblem_grants(bond_trait_max, emblem_only_traits)
     names0 = _hero_names_from_results(original_results)
     hero_only_traits = _trait_counts_from_names(names0, chess)
-    emblem_only_traits = _trait_counts_emblems_only(original_results, equip_by_bar, equip_grants)
     board_traits = _trait_counts_from_board(names0, original_results, equip_by_bar, chess, equip_grants)
     emblem_audit = _emblem_audit_rows(original_results, equip_by_bar, equip_grants)
     equip_on_board = {str(x.get("equip_name") or "").strip() for x in emblem_audit if x.get("equip_name")}
@@ -1132,6 +1349,12 @@ def _apply_cross_validation_rules(
     ]
     low_indices = [x for x in low_indices if x >= 0]
 
+    editable_indices = _editable_indices_for_greedy_fix(original_results, trait_loss=loss, mode=greedy_fix_mode)
+    editable_bar_indices = [
+        int((original_results[i] or {}).get("bar_index") or -1) for i in editable_indices if 0 <= i < len(original_results)
+    ]
+    editable_bar_indices = [x for x in editable_bar_indices if x >= 0]
+
     unknown_heroes = sorted({n for n in names0 if n and n not in chess})
 
     inference_notes: List[str] = []
@@ -1139,42 +1362,61 @@ def _apply_cross_validation_rules(
     changes: List[Dict[str, Any]] = []
     loss_after = loss
     status = "ok"
+    suspect_bar_indices: List[int] = []
 
     if consistent:
         status = "ok"
     else:
-        if not low_indices:
-            status = "mismatch_no_low_confidence"
-            inference_notes.append(
-                "棋盘推导羁绊与聚合羁绊不一致，且无非 low 置信度格子可供按候选替换推断；请检查高置信识别、羁绊 OCR 或装备/纹章识别。"
-            )
+        if not editable_indices:
+            status = "mismatch_no_editable_bar"
+            if greedy_fix_mode == "low":
+                inference_notes.append(
+                    "棋盘与羁绊不一致，且 confidence==low 的格子为空；可改用 --greedy-fix-mode low_or_mismatch 或 mismatch_all。"
+                )
+            else:
+                inference_notes.append(
+                    "棋盘与羁绊不一致，且当前 greedy_fix_mode 下无可编辑格子（trait_loss==0 时亦不应出现此分支）。"
+                )
         else:
-            confirmed, changes, loss_after, _ = _greedy_fix_low_confidence(
+            confirmed, changes, loss_after, _ = _greedy_fix_with_editable_indices(
                 original_results,
                 expected,
                 chess,
                 equip_by_bar,
                 equip_grants,
+                editable_indices,
             )
             if changes:
                 status = "mismatch_inferred" if loss_after > 0 else "ok_after_inference"
                 for ch in changes:
                     inference_notes.append(
-                        f"低置信 bar#{ch.get('bar_index')} {ch.get('position_label') or ''} : "
-                        f"「{ch.get('from')}」→ 推断「{ch.get('to')}」（trait_loss {ch.get('trait_loss_before')}→{ch.get('trait_loss_after')}）"
+                        f"贪心 bar#{ch.get('bar_index')} {ch.get('position_label') or ''} : "
+                        f"「{ch.get('from')}」→「{ch.get('to')}」（trait_loss {ch.get('trait_loss_before')}→{ch.get('trait_loss_after')}）"
                     )
             else:
-                status = "mismatch_low_not_helped"
+                status = "mismatch_greedy_not_helped"
                 inference_notes.append(
-                    "存在 low 置信度棋子，但 agg_top/vote 候选无法降低与羁绊表的差异；请扩大候选或检查羁绊 OCR、纹章与装备识别。"
+                    "在「羁绊栏期望已含场上纹章赐羁绊」的前提下，trait_loss 仍无法仅靠 agg_top/vote_top 换名降低。"
+                    "可检查羁绊栏 OCR、棋子识别或扩大候选；若纹章装备漏检，期望/棋盘仍会偏差。"
                 )
+                for i in editable_indices:
+                    if 0 <= i < len(confirmed) and isinstance(confirmed[i], dict):
+                        confirmed[i]["trait_cv_suspect"] = True
+                        confirmed[i]["trait_cv_suspect_reason"] = TRAIT_CV_SUSPECT_REASON_GREEDY_EXHAUSTED
+                        bi = int((confirmed[i] or {}).get("bar_index") or -1)
+                        if bi >= 0:
+                            suspect_bar_indices.append(bi)
+                suspect_bar_indices = sorted(set(suspect_bar_indices))
 
     return {
         "status": status,
-        "rules_version": "v1_trait_board_emblem",
+        "greedy_fix_mode": greedy_fix_mode,
+        "rules_version": "v2_bond_plus_emblem_expected",
         "legend_chess_path": str(legend_chess_path),
         "legend_traits_path": str(legend_traits_path),
         "legend_equip_path": str(legend_equip_path) if legend_equip_path else None,
+        "player_traits_from_bonds": bond_trait_max,
+        "emblem_bonus_applied_to_expected": emblem_only_traits,
         "player_traits_used": expected,
         "board_trait_counts": board_traits,
         "board_trait_counts_heroes_only": hero_only_traits,
@@ -1186,9 +1428,11 @@ def _apply_cross_validation_rules(
         "trait_loss_after": loss_after,
         "consistent": consistent,
         "low_confidence_bar_indices": low_indices,
+        "greedy_editable_bar_indices": editable_bar_indices,
         "unknown_hero_names": unknown_heroes,
         "changes": changes,
         "inference_notes": inference_notes,
+        "suspect_bar_indices": suspect_bar_indices,
         "confirmed_results": confirmed,
     }
 
@@ -1199,6 +1443,77 @@ def _fmt_terminal_trait_counts(d: Optional[Dict[str, Any]]) -> str:
         return "（无）"
     parts = [f"{int(n)}{t}" for t, n in sorted(d.items(), key=lambda kv: kv[0])]
     return " / ".join(parts)
+
+
+def _board_results_for_tcv_summary_display(fight_js: Dict[str, Any], cv: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    场上棋子列表：优先用 cross_validation.confirmed_results（与 TCV 贪心换名一致）；
+    与条数一致时覆盖原始 fightboard results。返回 (results 列表, 来源标签)。
+    """
+    raw = fight_js.get("results") or []
+    conf = cv.get("confirmed_results")
+    if isinstance(conf, list) and conf and isinstance(raw, list) and len(conf) == len(raw):
+        return conf, "confirmed_results（含 TCV 换名）"
+    return raw if isinstance(raw, list) else [], "fightboard_results_raw"
+
+
+def _build_tcv_summary_record(
+    *,
+    group: str,
+    fight_stem: str,
+    fight_file: str,
+    group_traits: Dict[str, Any],
+    fight_js: Dict[str, Any],
+    cv: Dict[str, Any],
+    chess: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    """
+    单组 TCV 摘要（供 tcv_summary.json）：羁绊栏、场上棋子+羁绊、是否一致、建议组合。
+    第 2 项优先用 confirmed_results，与第 4 项一致；mobilenet 输出的综合标注 PNG 为识别当时绘制，
+    未重绘时可能与修正后的名字不一致（见返回中的「说明」）。
+    """
+    tm_bond = dict(group_traits.get("trait_count_max") or {})
+    part1_bonds = {t: int(n) for t, n in sorted(tm_bond.items(), key=lambda kv: kv[0])}
+    exp_cv = dict(cv.get("player_traits_used") or {})
+    part1_tcv = {t: int(n) for t, n in sorted(exp_cv.items(), key=lambda kv: kv[0])}
+
+    results, part2_source = _board_results_for_tcv_summary_display(fight_js, cv)
+    part2: List[Dict[str, Any]] = []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        name = str(r.get("best") or "").strip()
+        part2.append(
+            {
+                "bar_index": r.get("bar_index"),
+                "棋子": name,
+                "固有羁绊": list(chess.get(name, [])),
+            }
+        )
+
+    loss_after = int(cv.get("trait_loss_after") if cv.get("trait_loss_after") is not None else cv.get("trait_loss") or 0)
+    ok = loss_after == 0
+
+    conf = cv.get("confirmed_results") or []
+    flat = _hero_names_from_results(conf) if isinstance(conf, list) else []
+
+    note = (
+        "第2项默认与 TCV 的 confirmed_results 一致（若与 mobilenet 综合标注 PNG 上文字不一致，"
+        "多为 PNG 仍为识别当时绘制、未应用交叉验证换名；以本 JSON 或 confirmed_fightboard 为准）。"
+        f" 当前第2项数据来源：{part2_source}。"
+    )
+    return {
+        "组号": group,
+        "主图stem": fight_stem,
+        "截图文件": fight_file,
+        "说明_与PNG可能不一致": note,
+        "2_场上棋子数据来源": part2_source,
+        "1_羁绊栏识别的羁绊及人数_max聚合": part1_bonds,
+        "1b_TCV比对期望_羁绊栏加纹章赐": part1_tcv,
+        "2_场上棋子及对应固有羁绊": part2,
+        "3_棋盘羁绊是否与TCV期望一致": ok,
+        "4_若有误时建议棋子组合": None if ok else flat,
+    }
 
 
 def _fightboard_piece_names_in_order(fightboard_summary: Dict[str, Any]) -> List[str]:
@@ -1243,9 +1558,12 @@ def _print_terminal_report(
     说明（1）：与 player_recog 一致的数据源为各图 fields.bonds.bond_items（已解析的「人数+羁绊」条目）；
     同组多图按羁绊取人数 max 聚合，不是 bond_summary 原始 OCR 长串的直接合并。
     羁绊名将按 data/rag_legend_traits.jsonl 标准名做归一（截断/近邻纠错）后再与棋盘比对。
+    （1b）：TCV 比对期望 =（1）+ 场上纹章赐羁绊人数（与棋盘侧装备赐块同源），见 rules_version v2。
     """
     _ = fight_file
-    exp = dict(merged.get("trait_count_max") or {})
+    exp_bond = dict(merged.get("trait_count_max") or {})
+    exp_cv = dict(cv.get("player_traits_used") or {})
+    em_to_exp = dict(cv.get("emblem_bonus_applied_to_expected") or {})
     bt = cv.get("board_trait_counts") or {}
     ho = cv.get("board_trait_counts_heroes_only") or {}
     eo = cv.get("board_trait_counts_emblems_only") or {}
@@ -1257,11 +1575,15 @@ def _print_terminal_report(
     print("\n" + "=" * 72)
     print(f"[交叉验证] 组={group}  |  主图 fightboard stem={fight_stem}")
     print("（1）玩家羁绊栏聚合（同组主/副图 bond_items 按羁绊取 max 人数；羁绊名按图鉴 rag_legend_traits 归一）")
-    print(f"     {_fmt_terminal_trait_counts(exp)}")
+    print(f"     {_fmt_terminal_trait_counts(exp_bond)}")
     fixes = merged.get("trait_canonicalization_log") or []
     if fixes:
         print(f"     羁绊 OCR→图鉴: {', '.join(fixes)}")
     print("     注：与单图 bond_summary 一行 OCR 不同；聚合仅以 bond_items 为准。")
+    print("（1b）TCV 比对用期望 =（1）+ 场上纹章/装备赐羁绊（与棋盘装备赐分项同源，不含棋子固有）")
+    print(f"     {_fmt_terminal_trait_counts(exp_cv)}")
+    if em_to_exp:
+        print(f"     └ 加算到期望的纹章赐: {_fmt_terminal_trait_counts(em_to_exp)}")
     print("（2）棋盘棋子名称（fightboard results）")
     print(f"     {', '.join(pieces) if pieces else '（无）'}")
     print("（3）转职/赐羁绊装备（图鉴「获得【X】羁绊」且本局识别到）")
@@ -1270,7 +1592,7 @@ def _print_terminal_report(
     print(f"     {_fmt_terminal_trait_counts(bt if isinstance(bt, dict) else {})}")
     print("     └ 分项 · 仅棋子: " + _fmt_terminal_trait_counts(ho if isinstance(ho, dict) else {}))
     print("     └ 分项 · 仅装备赐: " + _fmt_terminal_trait_counts(eo if isinstance(eo, dict) else {}))
-    print("（5）验证（(4) 与 (1) 是否一致）")
+    print("（5）验证（(4) 与 (1b) 是否一致）")
     print(f"     {'一致' if ok else '不一致'}  |  trait_loss={loss}  |  status={cv.get('status')}")
     diff = cv.get("trait_diff") or {}
     if diff and not ok:
@@ -1287,8 +1609,14 @@ def _print_terminal_report(
     if notes:
         for ln in notes:
             print(f"     说明: {ln}")
+    sb = cv.get("suspect_bar_indices") or []
+    if sb and cv.get("status") == "mismatch_greedy_not_helped":
+        print(
+            "     怀疑棋子（候选内换名仍无法对齐羁绊，trait_cv_suspect=true；bar_index）: "
+            + ", ".join(str(x) for x in sorted(sb))
+        )
     if chg:
-        print("     低置信修正（已写入 confirmed）:")
+        print("     羁绊贪心修正（agg_top/vote_top，已写入 confirmed）:")
         for c in chg:
             print(
                 f"       bar#{c.get('bar_index')} {c.get('position_label') or ''} "
@@ -1311,15 +1639,25 @@ def main() -> None:
         "--out",
         type=Path,
         default=None,
-        help=f"输出目录（默认同级下 {{img-dir名}}_cv_out，或 {DEFAULT_CV_OUT_DIR} 在仅 JSON 模式且无 img-dir 时）",
+        help=f"TCV 输出根目录（默认项目根下 {DEFAULT_CV_OUT_DIR.name}/，即 {DEFAULT_CV_OUT_DIR}）",
     )
     ap.add_argument(
         "--from-json",
         action="store_true",
         help="不跑识别，改为从 --fightboard-dir / --player-dir 读 summary（旧流程）",
     )
-    ap.add_argument("--fightboard-dir", type=Path, default=None, help="--from-json 时：fightboard / 合并 summary 目录")
-    ap.add_argument("--player-dir", type=Path, default=None, help="--from-json 时：player / 合并 summary 目录，可与 fightboard-dir 相同")
+    ap.add_argument(
+        "--fightboard-dir",
+        type=Path,
+        default=None,
+        help="--from-json：fightboard_mobilenet 生成的 *_fightboard_summary.json 目录（默认项目下 fightboard_info_v2）",
+    )
+    ap.add_argument(
+        "--player-dir",
+        type=Path,
+        default=None,
+        help="--from-json：player onnx / player_recog 的 *_summary.json 目录（默认项目下 player_info_onnx）",
+    )
     ap.add_argument("--no-cache", action="store_true", help="识别模式下禁用 fight/player 缓存")
     ap.add_argument("--cache-dir", type=Path, default=PROJECT_DIR / ".pipeline_cache", help="识别模式缓存目录")
     ap.add_argument(
@@ -1337,6 +1675,25 @@ def main() -> None:
     ap.add_argument("--legend-chess", type=Path, default=Path("data/rag_legend_chess.jsonl"))
     ap.add_argument("--legend-equip", type=Path, default=Path("data/rag_legend_equip.jsonl"), help="转职纹章等装备赐羁绊")
     ap.add_argument("--legend-traits", type=Path, default=Path("data/rag_legend_traits.jsonl"))
+    ap.add_argument(
+        "--greedy-fix-mode",
+        type=str,
+        choices=["low", "mismatch_all", "low_or_mismatch"],
+        default="low_or_mismatch",
+        help="羁绊不一致时的贪心换名范围：low=仅 confidence==low；mismatch_all=trait_loss>0 时全盘；"
+        "low_or_mismatch=有 low 则仅 low，否则同 mismatch_all（无置信度输出时推荐）",
+    )
+    ap.add_argument(
+        "--tcv-summary-json",
+        type=Path,
+        default=None,
+        help="四段摘要 tcv_summary.json 路径（默认写到 --out 目录下 tcv_summary.json）",
+    )
+    ap.add_argument(
+        "--no-tcv-summary",
+        action="store_true",
+        help="不写 tcv_summary.json（仍会写 confirmed_fightboard 等）",
+    )
     args = ap.parse_args()
 
     project_root = PROJECT_DIR
@@ -1347,15 +1704,21 @@ def main() -> None:
     if args.from_json:
         fd = args.fightboard_dir
         pd = args.player_dir
-        if fd is None or pd is None:
-            raise SystemExit("--from-json 时必须同时指定 --fightboard-dir 与 --player-dir")
+        if fd is None:
+            fd = project_root / "fightboard_info_v2"
+        if pd is None:
+            pd = project_root / "player_info_onnx"
         fight_dir = fd.resolve()
         player_dir = pd.resolve()
         out_root = (args.out or DEFAULT_CV_OUT_DIR).resolve()
         player_files = _iter_player_json_paths(player_dir)
         fight_files = _iter_fightboard_json_paths(fight_dir)
         if not fight_files:
-            raise SystemExit(f"未找到 fightboard 相关 json: {fight_dir}")
+            raise SystemExit(
+                f"未找到 fightboard 相关 json（需 *_fightboard_summary.json）: {fight_dir}\n"
+                f"  请运行: python fightboard_mobilenet.py --img-dir <对局截图目录> --out {fight_dir}\n"
+                f"  （默认会写出 JSON；勿加 --no-json）"
+            )
         if not player_files:
             raise SystemExit(f"未找到 player 相关 json: {player_dir}")
 
@@ -1376,6 +1739,11 @@ def main() -> None:
             if js:
                 fight_by_stem[stem] = js
 
+        if args.tcv_summary_json is None:
+            tcv_sp = (out_root / "tcv_summary.json").resolve()
+        else:
+            _p = Path(args.tcv_summary_json)
+            tcv_sp = _p.resolve() if _p.is_absolute() else (project_root / _p).resolve()
         _run_cross_validate_outputs(
             group_traits_map=group_traits_map,
             fight_by_stem=fight_by_stem,
@@ -1386,6 +1754,13 @@ def main() -> None:
             legend_equip=legend_equip,
             legend_traits=legend_traits,
             fightboard_source="json",
+            greedy_fix_mode=str(args.greedy_fix_mode),
+            tcv_summary_path=tcv_sp,
+            write_tcv_summary=not bool(args.no_tcv_summary),
+            tcv_summary_sources={
+                "player_json_dir": str(player_dir),
+                "fightboard_json_dir": str(fight_dir),
+            },
         )
         print(f"完成。输出目录: {out_root}")
         return
@@ -1397,7 +1772,13 @@ def main() -> None:
     if args.out is not None:
         out_root = args.out.resolve()
     else:
-        out_root = (img_dir.parent / f"{img_dir.name}_cv_out").resolve()
+        out_root = DEFAULT_CV_OUT_DIR.resolve()
+
+    if args.tcv_summary_json is None:
+        tcv_sp2 = (out_root / "tcv_summary.json").resolve()
+    else:
+        _p2 = Path(args.tcv_summary_json)
+        tcv_sp2 = _p2.resolve() if _p2.is_absolute() else (project_root / _p2).resolve()
 
     run_recognition_then_validate(
         img_dir=img_dir,
@@ -1409,6 +1790,9 @@ def main() -> None:
         legend_traits=legend_traits,
         use_cache=not bool(args.no_cache),
         cache_dir=args.cache_dir,
+        greedy_fix_mode=str(args.greedy_fix_mode),
+        tcv_summary_path=tcv_sp2,
+        write_tcv_summary=not bool(args.no_tcv_summary),
     )
 
 

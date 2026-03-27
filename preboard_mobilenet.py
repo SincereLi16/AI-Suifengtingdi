@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-preboard_mobilenet：备战席识别（MobileNet + DML/CPU + ONNX血条）
+preboard_mobilenet：备战席识别（MobileNet + DML/CPU；血条为 fightboard V3 细切块 + OpenCV TM）
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def _detect_one_bar_equip_top1(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="preboard_mobilenet：备战席棋子+装备综合标注（MobileNet+DML+ONNX）")
+    ap = argparse.ArgumentParser(description="preboard_mobilenet：备战席棋子+装备综合标注（MobileNet+DML；血条 OpenCV TM）")
     ap.add_argument("--img-dir", type=Path, default=DEFAULT_INPUT)
     ap.add_argument("--piece-dir", type=Path, default=DEFAULT_PIECE_DIR)
     ap.add_argument("--equip-gallery", type=Path, default=DEFAULT_EQUIP_GALLERY)
@@ -157,7 +157,7 @@ def main() -> None:
         int(round(args.cy + half + float(args.seat_down_extra_px))),
     )
 
-    # 血条检测函数替换为 v3 的 ORT+DML 版本
+    # 血条检测函数替换为 fightboard V3（细切块 + OpenCV TM）
     legacy_detect = f3._detect_healthbars_in_roi
     f3._detect_healthbars_in_roi = lambda scene, templates, roi, strategy="simple_tiled", simple_threshold=0.58: f3._v3_detect_healthbars_in_roi(
         scene, templates, roi, simple_threshold=float(simple_threshold)
@@ -177,7 +177,6 @@ def main() -> None:
                 chess_out_dir = Path(td) / "chess"
                 chess_out_dir.mkdir(parents=True, exist_ok=True)
                 out_json = f3.run_recognition_chess(
-                    backend="mobilenet_v3_small",
                     image_path=image_path,
                     template_path=template,
                     piece_dir=piece_dir,

@@ -1,34 +1,42 @@
 # -*- coding: utf-8 -*-
 """
-battle_pipeline_v3：在 v2 基础上加速 chess_recog 的 torch_bar_loop，并优先使用 CUDA 推理。
+battle_pipeline_v3：单链路对局分析（与当前子模块选型一致）。
 
-相对 battle_pipeline_v2：
-- chess_recog.run_recognition：``batch_embed=True`` 时 Stage1/Stage2 各用一次 batched ViT 前向（同模型、同逻辑）；
-  默认 ``save_debug_crops=False`` 跳过 crops PNG 落盘。
-- 初始化时 ``torch.backends.cudnn.benchmark = True``（224 固定输入），并打印当前 CUDA 设备名。
-- 其余流程（equip_column、player OCR、TCV、主图出图）与 v2 一致。
+流程：
+1. 主图 / 辅图：按 stem 后缀（如 -a 为主图）区分；
+2. 主图：fightboard_mobilenet（棋子 MobileNet + 血条下装备）+ player_onnx 全 ROI + equip_column 全量，输出 JSON 结构；
+3. 辅图：player_onnx 仅羁绊栏（bonds_only），合并进同组主图的 player JSON；
+4. trait_cross_validate：用合并后的羁绊与棋盘结果校验/校准棋子；
+5. 仅主图输出 PNG + JSON：左侧为**原始截图**（不在画面上叠字/框），右侧为汇总面板。
+
+设备策略：
+- fightboard 棋子嵌入：torch，auto 优先 DirectML → CUDA → CPU（与 fightboard_mobilenet 一致）；
+- player_onnx：ONNX Runtime，auto 优先 DirectML → CUDA → CPU（与 player_onnx 一致）。
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import shutil
 import tempfile
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 
-import battle_pipeline as bp
-import fightboard_recog as fb
-import player_recog as pr
-import preboard_recog as pb
+import fightboard_mobilenet as fm
+import player_onnx as pon
 import trait_cross_validate as tcv
+from element_recog import bars_recog as br
+from element_recog import chess_recog as cr
+from element_recog import equip_recog as er
 from element_recog import equip_column_recog as ecr
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -36,21 +44,37 @@ DEFAULT_INPUT = PROJECT_DIR / "对局截图"
 DEFAULT_OUT = PROJECT_DIR / "battle_pipeline_v3_out"
 
 
-def _configure_torch_cuda_for_v3() -> None:
-    """固定输入尺寸下启用 cuDNN autotune，并打印推理设备（无 CUDA 时仍可用 CPU + batch）。"""
-    import torch
+def _iter_images(path: Path) -> List[Path]:
+    exts = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+    if path.is_file():
+        return [path]
+    if not path.is_dir():
+        raise SystemExit(f"输入路径不存在: {path}")
+    files = [p for p in sorted(path.iterdir()) if p.is_file() and p.suffix.lower() in exts]
+    if not files:
+        raise SystemExit(f"输入目录内无图像: {path}")
+    return files
 
-    if not torch.cuda.is_available():
-        print("[V3] CUDA 不可用，将使用 CPU（batch 嵌入仍可减少 ViT 前向次数）")
-        return
-    try:
-        torch.backends.cudnn.benchmark = True
-    except Exception:
-        pass
-    try:
-        print(f"[V3] CUDA 推理: {torch.cuda.get_device_name(0)}")
-    except Exception:
-        print("[V3] CUDA 可用")
+
+def _save_image(path: Path, bgr: np.ndarray) -> None:
+    ok, buf = cv2.imencode(".png", bgr)
+    if not ok:
+        raise RuntimeError(f"图片编码失败: {path}")
+    path.write_bytes(buf.tobytes())
+
+
+def _configure_pipeline_devices() -> Tuple[str, Dict[str, bool]]:
+    """打印 MobileNet 所用 torch 设备；返回 player_onnx 的 OCR 设备名与 kwargs。"""
+    dev, backend = fm._select_torch_device(
+        torch_device="auto",
+        prefer_rocm=False,
+        auto_priority="dml,cuda,cpu",
+        fallback_to_cpu=True,
+    )
+    print(f"[V3] fightboard MobileNet torch device={dev} ({backend})")
+    name, kwargs = pon._resolve_device("auto")
+    print(f"[V3] player_onnx OCR ort device={name}")
+    return name, kwargs
 
 
 def _pil_text_width(font: Any, text: str) -> float:
@@ -137,10 +161,10 @@ def _draw_summary_panel(base: np.ndarray, lines: List[str], *, title: str = "对
 
 def _format_board_position(pos_obj: Any) -> str:
     if isinstance(pos_obj, dict):
-        cr = pos_obj.get("cell_row")
+        cr_ = pos_obj.get("cell_row")
         cc = pos_obj.get("cell_col")
-        if cr is not None and cc is not None:
-            return f"{int(cr)},{int(cc)}"
+        if cr_ is not None and cc is not None:
+            return f"{int(cr_)},{int(cc)}"
         lab = pos_obj.get("label")
         if lab:
             return str(lab)
@@ -173,30 +197,6 @@ def _fightboard_pipe_lines(fight_json: Optional[Dict[str, Any]]) -> List[str]:
                         equip_names.append(en)
         eq_str = "、".join(equip_names) if equip_names else "无"
         lines.append(f"{name} | {pos} | {eq_str}")
-    return lines
-
-
-def _preboard_lines(pre_json: Optional[Dict[str, Any]]) -> List[str]:
-    lines: List[str] = []
-    pc = (pre_json or {}).get("pieces_by_cell") or {}
-    eqc = (pre_json or {}).get("equip_by_cell") or {}
-    pre_keys = sorted(pc.keys(), key=lambda x: bp._safe_int(x, 0))
-    if not pre_keys:
-        lines.append("(无棋子)")
-        return lines
-    for k in pre_keys:
-        o = pc.get(k) or {}
-        nm = str(o.get("best") or "").strip()
-        if not nm:
-            continue
-        eo = eqc.get(k) if isinstance(eqc, dict) else None
-        if eo is None and isinstance(eqc, dict):
-            eo = eqc.get(str(k))
-        en = ""
-        if isinstance(eo, dict):
-            en = str(eo.get("name") or "").strip()
-        eq_str = en if en else "无"
-        lines.append(f"{nm} | {k} | {eq_str}")
     return lines
 
 
@@ -288,6 +288,80 @@ def _situation_lines(player_json: Optional[Dict[str, Any]]) -> List[str]:
     return lines
 
 
+def _slim_fight_result_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    """写入 summary.json 用：去掉每条棋子上的大字段 samples/stage2，并截断候选列表。"""
+    if not isinstance(r, dict):
+        return r
+    out: Dict[str, Any] = {k: v for k, v in r.items() if k not in ("samples", "stage2")}
+    at = out.get("agg_top")
+    if isinstance(at, list):
+        out["agg_top"] = at[:3]
+    vt = out.get("vote_top")
+    if isinstance(vt, list):
+        out["vote_top"] = vt[:3]
+    return out
+
+
+def _slim_fightboard_module(fj: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(fj)
+    rs = out.get("results")
+    if isinstance(rs, list):
+        out["results"] = [_slim_fight_result_row(x) if isinstance(x, dict) else x for x in rs]
+    out.pop("timings_s", None)
+    return out
+
+
+def _slim_group_traits_for_export(gt: Dict[str, Any]) -> Dict[str, Any]:
+    """羁绊聚合：summary 中只保留计数与一行汇总，去掉 per_file 长表。"""
+    return {
+        "trait_count_max": dict(gt.get("trait_count_max") or {}),
+        "merged_bonds_one_line": str(gt.get("merged_bonds_one_line") or ""),
+    }
+
+
+def _slim_cross_validation_for_export(cv: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    TCV 精简：保留状态、损失、差异、说明与修正；去掉 legend 路径、冗长分项与可编辑条列表。
+    装备纹章只保留「有条目且 granted_traits 非空」的简短列表。
+    """
+    keys = (
+        "status",
+        "greedy_fix_mode",
+        "rules_version",
+        "trait_loss",
+        "trait_loss_after",
+        "consistent",
+        "trait_diff",
+        "player_traits_from_bonds",
+        "emblem_bonus_applied_to_expected",
+        "player_traits_used",
+        "board_trait_counts",
+        "inference_notes",
+        "changes",
+        "suspect_bar_indices",
+    )
+    slim: Dict[str, Any] = {k: cv[k] for k in keys if k in cv}
+    em = cv.get("emblem_contributions") or []
+    grants: List[Dict[str, Any]] = []
+    if isinstance(em, list):
+        for x in em:
+            if not isinstance(x, dict):
+                continue
+            tr = x.get("granted_traits") or []
+            if not tr:
+                continue
+            grants.append(
+                {
+                    "bar_index": x.get("bar_index"),
+                    "equip": x.get("equip_name"),
+                    "granted_traits": list(tr),
+                }
+            )
+    if grants:
+        slim["emblem_grants"] = grants
+    return slim
+
+
 def _cv_analysis_lines_v2_slim(cv: Dict[str, Any]) -> List[str]:
     """TCV 摘要：不含「棋盘羁绊·英雄/装备赐/合计」三行。"""
     lines: List[str] = []
@@ -328,7 +402,6 @@ def _bond_lines_and_tcv(
 def _summary_lines_v3_primary(
     *,
     fight_json: Optional[Dict[str, Any]],
-    pre_json: Optional[Dict[str, Any]],
     player_json_main: Optional[Dict[str, Any]],
     equip_col_json: Optional[Dict[str, Any]],
     group_traits: Dict[str, Any],
@@ -343,10 +416,7 @@ def _summary_lines_v3_primary(
     lines.append("【棋盘】")
     lines.extend(_fightboard_pipe_lines(fight_json))
     lines.append("")
-    lines.append("【备战】")
-    lines.extend(_preboard_lines(pre_json))
-    lines.append("")
-    lines.append("【装备】")
+    lines.append("【装备栏】")
     lines.extend(_equip_column_text_lines(equip_col_json))
     lines.append("")
     lines.append("【局势】")
@@ -354,90 +424,86 @@ def _summary_lines_v3_primary(
     return lines
 
 
-def _run_one_fightboard_profiled(
+def _run_equip_column_on_path(
+    image_path: Path,
+    col_templates: Sequence[Tuple[str, Any]],
+    scales_col: Sequence[int],
+) -> Dict[str, Any]:
+    scene_bgr = cr._load_image(image_path)
+    return ecr.compute_equip_column_matches(
+        scene_bgr,
+        templates=list(col_templates),
+        equip_roi=ecr.DEFAULT_EQUIP_ROI,
+        scales=tuple(scales_col),
+        threshold=0.6,
+        max_peaks_per_scale=4,
+        top_k=15,
+        nms_iou=0.35,
+        blue_buff_gap_min=0.05,
+        blue_buff_single_min_score=0.78,
+        grid_cols=2,
+        grid_rows=10,
+        skip_block_min_std=0.0,
+        block_workers=1,
+    )
+
+
+def _run_fightboard_mobilenet_one(
     *,
     image_path: Path,
-    template,
-    model,
-    device,
-    transform,
-    piece_db,
-    equip_templates,
-    scales: List[int],
+    chess_tmp: Path,
+    mobilenet_bundle: Tuple[Any, Any, Any, List[str], np.ndarray],
+    bar_tpl: Path,
+    equip_templates: List[Tuple[str, Any]],
+    scales_bar: Sequence[int],
     min_roi: int,
-    temp_out: Path,
+    batch_embed: bool,
+    save_debug_crops: bool,
     tag: str,
-    batch_embed: bool = True,
-    save_debug_crops: bool = False,
-    cross_bar_stage1_batch_embed: bool = True,
 ) -> Dict[str, Any]:
-    """与 battle_pipeline._run_one_fightboard 等价，终端输出分步耗时与统计。"""
+    """
+    fightboard_mobilenet 单图：chess + 血条下装备，返回与 TCV 兼容的 summary（含 results、equip_by_bar）。
+    """
     t0 = time.perf_counter()
-    scene_bgr = fb.cr._load_image(image_path)
+    scene_bgr = cr._load_image(image_path)
     t1 = time.perf_counter()
-    print(f"  [{tag}] fightboard-1 加载图像: {t1 - t0:.4f}s  size={scene_bgr.shape[1]}x{scene_bgr.shape[0]}")
+    print(f"  [{tag}] fightboard 加载图像: {t1 - t0:.4f}s  size={scene_bgr.shape[1]}x{scene_bgr.shape[0]}")
 
-    t0 = time.perf_counter()
-    cr_profile: Dict[str, float] = {}
-    out_json = fb.cr.run_recognition(
+    chess_out_dir = chess_tmp
+    chess_out_dir.mkdir(parents=True, exist_ok=True)
+    t_c0 = time.perf_counter()
+    out_json = fm.run_recognition_chess(
         image_path=image_path,
-        template_path=template,
+        template_path=bar_tpl,
         piece_dir=PROJECT_DIR / "chess_gallery",
-        output_dir=temp_out,
+        output_dir=chess_out_dir,
         circle_diameter=84,
-        model=model,
-        device=device,
-        transform=transform,
-        piece_db=piece_db,
         alpha_tight=True,
-        profile_timings=cr_profile,
-        batch_embed=batch_embed,
         save_debug_crops=save_debug_crops,
-        cross_bar_stage1_batch_embed=cross_bar_stage1_batch_embed,
+        batch_embed=batch_embed,
+        mobilenet_bundle=mobilenet_bundle,
+        torch_device="auto",
+        prefer_rocm=False,
+        torch_auto_priority="dml,cuda,cpu",
+        torch_fallback_to_cpu=True,
+        print_timings=True,
     )
-    t1 = time.perf_counter()
-    results = out_json.get("results") or []
-    n_bars = len(results)
-    samples = out_json.get("samples")
-    n_samp = len(samples) if isinstance(samples, list) else 0
-    if not batch_embed:
-        be = "逐枚前向"
-    elif cross_bar_stage1_batch_embed:
-        be = "batch_embed+跨血条Stage1"
-    else:
-        be = "batch_embed"
-    print(
-        f"  [{tag}] fightboard-2 chess_recog.run_recognition（{be}；血条检测+嵌入匹配）: "
-        f"{t1 - t0:.4f}s  血条数={n_bars}  采样圆点数={n_samp}"
-    )
-    _cr_order = [
-        "load_scene_templates",
-        "detect_healthbars",
-        "prepare_model_and_db",
-        "mark_roi_tiles",
-        "prefetch_cross_bar_stage1",
-        "torch_bar_loop",
-        "position_mapping",
-        "save_outputs",
-        "total",
-    ]
-    for _k in _cr_order:
-        if _k in cr_profile:
-            print(f"      └ {_k}: {cr_profile[_k]:.4f}s")
+    print(f"  [{tag}] fightboard chess_recog(MobileNet): {time.perf_counter() - t_c0:.4f}s")
 
+    results: List[Dict[str, Any]] = list(out_json.get("results") or [])
+    method = cv2.TM_CCOEFF_NORMED
     equip_by_bar: Dict[int, List[Dict[str, Any]]] = {}
     t_eq0 = time.perf_counter()
-    total_eq = 0
     for i, r in enumerate(results):
         t_b0 = time.perf_counter()
         bi = int(r.get("bar_index") or 0)
         bar_box = r.get("bar_box") or [0, 0, 0, 0]
-        eq_list = fb._detect_one_bar_equip(
+        eq_list = fm._detect_one_bar_equip(
             scene_bgr,
             bar_box_xywh=bar_box,
             templates=equip_templates,
-            scales=scales,
-            method=cv2.TM_CCOEFF_NORMED,
+            scales=scales_bar,
+            method=method,
             threshold=0.78,
             max_peaks_per_scale=4,
             top_k=15,
@@ -450,204 +516,96 @@ def _run_one_fightboard_profiled(
             label_topn=3,
         )
         equip_by_bar[bi] = eq_list
-        total_eq += len(eq_list)
-        t_b1 = time.perf_counter()
         print(
-            f"  [{tag}] fightboard-3 血条下方装备ROI 条{i + 1}/{n_bars} bar_index={bi} "
-            f"裁剪+模板匹配 装备数={len(eq_list)} 耗时={t_b1 - t_b0:.4f}s"
+            f"  [{tag}] fightboard 装备 bar{i + 1}/{len(results)} idx={bi} n={len(eq_list)} "
+            f"{time.perf_counter() - t_b0:.4f}s"
         )
-    t_eq1 = time.perf_counter()
-    print(f"  [{tag}] fightboard-3 小计（全部血条装备）: {t_eq1 - t_eq0:.4f}s  装备条目合计={total_eq}")
+    print(f"  [{tag}] fightboard 装备小计: {time.perf_counter() - t_eq0:.4f}s")
 
-    t0 = time.perf_counter()
-    vis = fb._overlay_fightboard(scene_bgr=scene_bgr, results=results, equip_by_bar=equip_by_bar, font_size=16)
-    t1 = time.perf_counter()
-    print(f"  [{tag}] fightboard-4 叠加棋子/血条/装备标注: {t1 - t0:.4f}s")
-
-    return {"vis": vis, "summary": {"file": image_path.name, "results": results, "equip_by_bar": equip_by_bar}}
-
-
-def _run_one_preboard_profiled(
-    *,
-    image_path: Path,
-    template,
-    model,
-    device,
-    transform,
-    piece_db,
-    equip_templates,
-    scales: List[int],
-    min_roi: int,
-    temp_out: Path,
-    tag: str,
-    batch_embed: bool = True,
-    save_debug_crops: bool = False,
-    cross_bar_stage1_batch_embed: bool = True,
-) -> Dict[str, Any]:
-    """与 battle_pipeline._run_one_preboard 等价，终端输出分步耗时。"""
-    t0 = time.perf_counter()
-    scene_bgr = pb.cr._load_image(image_path)
-    t1 = time.perf_counter()
-    print(f"  [{tag}] preboard-1 加载图像: {t1 - t0:.4f}s")
-
-    first_cx, last_cx, cy, n_cells, cell_size = 600.0, 1580.0, 880.0, 9, 120
-    seat_up_extra_px, seat_down_extra_px, seat_lr_extra_px, seat_left_extra_px = 70, 30, 30, 20
-    half = cell_size / 2.0
-    custom_roi = (
-        int(round(min(first_cx, last_cx) - half - seat_lr_extra_px - seat_left_extra_px)),
-        int(round(cy - half - seat_up_extra_px)),
-        int(round(max(first_cx, last_cx) + half + seat_lr_extra_px)),
-        int(round(cy + half + seat_down_extra_px)),
-    )
-    old_roi = pb.cr.ROI
-    try:
-        pb.cr.ROI = custom_roi
-        t0 = time.perf_counter()
-        out_json = pb.cr.run_recognition(
-            image_path=image_path,
-            template_path=template,
-            piece_dir=PROJECT_DIR / "chess_gallery",
-            output_dir=temp_out,
-            circle_diameter=84,
-            embed_backbone="dinov2_vits14",
-            model=model,
-            device=device,
-            transform=transform,
-            piece_db=piece_db,
-            alpha_tight=True,
-            batch_embed=batch_embed,
-            save_debug_crops=save_debug_crops,
-            cross_bar_stage1_batch_embed=cross_bar_stage1_batch_embed,
-        )
-        t1 = time.perf_counter()
-        results = out_json.get("results") or []
-        n_bars = len(results)
-        samples = out_json.get("samples")
-        n_samp = len(samples) if isinstance(samples, list) else 0
-        if not batch_embed:
-            pre_be = "逐枚前向"
-        elif cross_bar_stage1_batch_embed:
-            pre_be = "batch+跨血条Stage1"
-        else:
-            pre_be = "batch"
-        print(
-            f"  [{tag}] preboard-2 chess_recog.run_recognition（备战区 ROI · {pre_be}）: "
-            f"{t1 - t0:.4f}s  检测血条数={n_bars}  采样圆点={n_samp}"
-        )
-    finally:
-        pb.cr.ROI = old_roi
-
-    t0 = time.perf_counter()
-    pieces_by_cell = pb._assign_piece_bars_to_cells(
-        results,
-        n_cells=n_cells,
-        first_cx=first_cx,
-        step_x=(last_cx - first_cx) / max(1, n_cells - 1),
-    )
-    t1 = time.perf_counter()
-    n_occupied = sum(1 for v in pieces_by_cell.values() if str((v or {}).get("best") or "").strip())
-    print(f"  [{tag}] preboard-3 映射到备战格: {t1 - t0:.4f}s  有棋子格数={n_occupied}/{n_cells}")
-
-    equip_by_cell: Dict[int, Optional[Dict[str, Any]]] = {}
-    t_eq0 = time.perf_counter()
-    for idx, piece_obj in sorted(pieces_by_cell.items(), key=lambda kv: bp._safe_int(kv[0], 0)):
-        t_b0 = time.perf_counter()
-        bar_box = piece_obj.get("bar_box") or [0, 0, 0, 0]
-        equip_by_cell[idx] = pb._detect_one_bar_equip_top1(
-            scene_bgr,
-            bar_box_xywh=bar_box,
-            templates=equip_templates,
-            scales=scales,
-            method=cv2.TM_CCOEFF_NORMED,
-            threshold=0.78,
-            max_peaks_per_scale=4,
-            top_k=15,
-            nms_iou=0.35,
-            below_px=2,
-            crop_w=120,
-            crop_h=50,
-            min_roi=min_roi,
-            blue_buff_gap_min=0.05,
-        )
-        t_b1 = time.perf_counter()
-        eq_one = equip_by_cell[idx]
-        en = str((eq_one or {}).get("name") or "").strip() if isinstance(eq_one, dict) else ""
-        print(f"  [{tag}] preboard-4 格{idx} 装备top1: {t_b1 - t_b0:.4f}s  name={en or '(无)'}")
-    t_eq1 = time.perf_counter()
-    print(f"  [{tag}] preboard-4 小计（全部格）: {t_eq1 - t_eq0:.4f}s")
-
-    t0 = time.perf_counter()
-    vis = pb._draw_preboard_overlay(
-        scene_bgr,
-        coverage_roi=custom_roi,
-        n_cells=n_cells,
-        cell_size=cell_size,
-        pieces_by_cell=pieces_by_cell,
-        equip_by_cell=equip_by_cell,
-        font_size=16,
-    )
-    t1 = time.perf_counter()
-    print(f"  [{tag}] preboard-5 叠加绘制（仅用于 JSON/调试，主图输出不用）: {t1 - t0:.4f}s")
-
-    return {
-        "vis": vis,
-        "summary": {
-            "file": image_path.name,
-            "coverage_roi": list(custom_roi),
-            "pieces_by_cell": pieces_by_cell,
-            "equip_by_cell": equip_by_cell,
-        },
+    summary: Dict[str, Any] = {
+        "file": image_path.name,
+        "pipeline": "fightboard_mobilenet",
+        "chess_backend": "mobilenet_v3_small",
+        "results": results,
+        "equip_by_bar": equip_by_bar,
     }
+    return summary
 
 
-def _ensure_fight_pre_runtime(
-    template_holder: List[Any],
-    model_holder: List[Any],
-    device_holder: List[Any],
-    transform_holder: List[Any],
-    piece_db_holder: List[Any],
-    equip_templates_holder: List[Any],
-) -> None:
-    if model_holder[0] is not None:
+_mobilenet_bundle_box: List[Any] = [None]
+_bar_tpl_box: List[Any] = [None]
+_equip_templates_box: List[Any] = [None]
+
+
+def _ensure_fightboard_mobilenet_runtime() -> None:
+    if _mobilenet_bundle_box[0] is not None:
         return
-    print("[V3] 初始化 fightboard / preboard 模型…")
-    _configure_torch_cuda_for_v3()
-    template_holder[0] = fb.br.find_healthbar_template(PROJECT_DIR)
+    print("[V3] 初始化 fightboard_mobilenet（MobileNet + 装备模板）…")
     try:
-        model, device, transform = fb.cr._get_embedding_model("dinov2_vits14")
+        _mobilenet_bundle_box[0] = fm._get_worker_mobilenet_bundle(
+            piece_dir=PROJECT_DIR / "chess_gallery",
+            torch_device="auto",
+            prefer_rocm=False,
+            torch_auto_priority="dml,cuda,cpu",
+            torch_fallback_to_cpu=True,
+        )
     except OSError as ex:
         msg = str(ex)
         if "shm.dll" in msg or "WinError 127" in msg or "找不到指定的程序" in msg:
             raise SystemExit(
-                "无法加载 PyTorch（fightboard 依赖 DINOv2/torch）。\n"
-                "常见原因：缺少 VC++ 运行库或 torch 与系统不匹配。\n"
-                "可尝试：\n"
-                "  1) 安装 Microsoft Visual C++ 2015–2022 Redistributable (x64)\n"
-                "  2) 按 pytorch.org 选择与当前 Python 版本一致的 CPU/CUDA 轮子重装 torch\n"
-                "  3) 在项目专用 venv 中重新 pip install torch torchvision\n"
+                "无法加载 PyTorch（fightboard_mobilenet 依赖 torch）。\n"
+                "可尝试安装 VC++ 运行库或按 pytorch.org 重装与 Python 版本一致的 torch。\n"
                 f"\n原始错误: {msg}"
             ) from ex
         raise
-    model_holder[0] = model
-    device_holder[0] = device
-    transform_holder[0] = transform
-    piece_db, _ = fb.cr.load_or_build_piece_embedding_db(
-        PROJECT_DIR / "chess_gallery",
-        model,
-        device,
-        transform,
-        embed_backbone="dinov2_vits14",
-        root=PROJECT_DIR,
-        force_rebuild=False,
-        verbose=True,
-    )
-    piece_db_holder[0] = piece_db
-    equip_templates_holder[0] = fb.er._build_templates(PROJECT_DIR / "equip_gallery")
+    _bar_tpl_box[0] = br.find_healthbar_template(PROJECT_DIR)
+    _equip_templates_box[0] = fm._get_worker_equip_templates(PROJECT_DIR / "equip_gallery")
+
+
+def _merge_player_group(
+    primary_stem: Optional[str],
+    stems_in_group: List[str],
+    player_partial_by_stem: Dict[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """同组主图全量 + 辅图羁绊合并，结构与 player_onnx 成对输出一致。"""
+    if primary_stem and primary_stem in player_partial_by_stem:
+        final = copy.deepcopy(player_partial_by_stem[primary_stem])
+        mb = final.get("fields", {}).get("bonds") or pon._empty_bonds_field()
+        for st in stems_in_group:
+            if st == primary_stem:
+                continue
+            o = player_partial_by_stem.get(st)
+            if not o:
+                continue
+            b2 = (o.get("fields") or {}).get("bonds")
+            if isinstance(b2, dict):
+                mb = pon._merge_bonds_fields(mb, b2)
+        if isinstance(final.get("fields"), dict):
+            final["fields"]["bonds"] = mb
+        final["mode"] = "onepass_stitch_ocr_pair_merged"
+        final["pair_stems"] = list(stems_in_group)
+        return final
+
+    merged_b = pon._empty_bonds_field()
+    for st in stems_in_group:
+        o = player_partial_by_stem.get(st)
+        if not o:
+            continue
+        b2 = (o.get("fields") or {}).get("bonds")
+        if isinstance(b2, dict):
+            merged_b = pon._merge_bonds_fields(merged_b, b2)
+    if not stems_in_group:
+        return None
+    return {
+        "file": f"group-{'-'.join(sorted(stems_in_group))}",
+        "mode": "bonds_only_group_no_primary",
+        "fields": pon._empty_fields_shell(merged_b),
+    }
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="battle_pipeline_v3：batch 嵌入 + CUDA 优先；fight+pre+player+equip_column + trait cross validate（仅主图出图）"
+        description="battle_pipeline_v3：fightboard_mobilenet + player_onnx + equip_column + TCV（仅主图出图）"
     )
     ap.add_argument("--img-dir", type=Path, default=DEFAULT_INPUT)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -661,27 +619,21 @@ def main() -> None:
         "--fightboard-stem-suffix",
         type=str,
         default="a",
-        help="仅主图 stem（-a/_a 或纯数字）跑 fight/pre/equip_column 全链并出图",
+        help="主图 stem（-a/_a 或纯数字）跑 fightboard 全链并出图",
     )
     ap.add_argument(
         "--no-batch-embed",
         action="store_true",
-        help="关闭 chess_recog 批量前向（与 v2 逐枚 forward 行为接近，用于对比）",
+        help="关闭棋子采样批量前向（MobileNet）",
     )
     ap.add_argument(
         "--save-debug-crops",
         action="store_true",
-        help="写出 chess_recog crops 目录下的调试图 PNG（较慢）",
-    )
-    ap.add_argument(
-        "--no-cross-bar-stage1",
-        action="store_true",
-        help="关闭 Stage1 跨血条合并前向（仍可用逐条 batch_embed，用于对比速度与结果）",
+        help="写出 chess_recog 调试图 crops（较慢）",
     )
     args = ap.parse_args()
     batch_embed = not bool(args.no_batch_embed)
     save_debug_crops = bool(args.save_debug_crops)
-    cross_bar_stage1 = not bool(args.no_cross_bar_stage1)
 
     img_dir = args.img_dir.resolve()
     out_root = args.out.resolve()
@@ -689,7 +641,7 @@ def main() -> None:
         shutil.rmtree(out_root, ignore_errors=True)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    images = bp._iter_images(img_dir)
+    images = _iter_images(img_dir)
     if not images:
         raise SystemExit(f"输入目录无图像: {img_dir}")
 
@@ -700,26 +652,17 @@ def main() -> None:
     min_roi_bar = max(scales_bar)
     scales_col = (60, 61, 62, 63, 64)
 
-    template_box: List[Any] = [None]
-    model_box: List[Any] = [None]
-    device_box: List[Any] = [None]
-    transform_box: List[Any] = [None]
-    piece_db_box: List[Any] = [None]
-    equip_templates_box: List[Any] = [None]
-
     need_fight = any(tcv._stem_matches_fightboard_suffix(p.stem, suffix) for p in images)
     if not need_fight:
         print("[V3] 当前输入无主图（如 -a），将仅跑 player/equip_column，不进行 fightboard 交叉验证。")
+    else:
+        print("[V3] 预加载 fightboard MobileNet（先于 player_onnx OCR 初始化）…")
+        _ensure_fightboard_mobilenet_runtime()
 
-    if need_fight:
-        print("[V3] 预加载 PyTorch（先于 Paddle OCR，避免 Windows DLL 冲突）…")
-        _ensure_fight_pre_runtime(template_box, model_box, device_box, transform_box, piece_db_box, equip_templates_box)
+    _pon_name, pon_kwargs = _configure_pipeline_devices()
+    ocr_engine = pon.create_ocr_engine(pon_kwargs)
 
-    print("[V3] 初始化 OCR…")
-    centers, rects = pr._default_layout()
-    ocr_engine = pr._create_ocr_engine(verbose=False)
-
-    col_templates = fb.er._build_templates(PROJECT_DIR / "equip_gallery")
+    col_templates = er._build_templates(PROJECT_DIR / "equip_gallery")
     if not col_templates:
         raise SystemExit(f"装备图鉴为空: {PROJECT_DIR / 'equip_gallery'}")
 
@@ -727,11 +670,10 @@ def main() -> None:
     print(f"[V3] 初始化完成 ({t0_all:.1f}s 起算)")
 
     fight_by_stem: Dict[str, Dict[str, Any]] = {}
-    pre_by_stem: Dict[str, Dict[str, Any]] = {}
-    primary_fight_vis_by_stem: Dict[str, Any] = {}
     equip_column_by_stem: Dict[str, Dict[str, Any]] = {}
-    player_by_stem: Dict[str, Dict[str, Any]] = {}
-    player_by_group: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    player_partial_by_stem: Dict[str, Dict[str, Any]] = {}
+    raw_scene_by_stem: Dict[str, np.ndarray] = {}
+    stems_by_group: Dict[str, List[str]] = defaultdict(list)
 
     with tempfile.TemporaryDirectory(prefix="bp_v3_tmp_") as td:
         tmp = Path(td)
@@ -750,113 +692,99 @@ def main() -> None:
                 )
 
             run_fight = tcv._stem_matches_fightboard_suffix(stem, suffix)
+            gk = tcv._extract_group_key(stem, args.group_pattern)
+            stems_by_group[gk].append(stem)
+
             if run_fight:
-                print(f"[V3] 处理 {image_path.name}（主图 · fight + pre + player + equip_column）…")
+                print(f"[V3] 处理 {image_path.name}（主图 · fightboard + player + equip_column）…")
             else:
-                print(f"[V3] 处理 {image_path.name}（辅图 · player + equip_column）…")
+                print(f"[V3] 处理 {image_path.name}（辅图 · 羁绊栏 player_onnx）…")
 
             t_img = time.perf_counter()
-            t_h0 = time.perf_counter()
-            fp_digest = tcv._file_sha1(image_path) + f"|norm:{target_w}x{target_h}|src:{src_w}x{src_h}"
-            print(f"  [{image_path.name}] 文件指纹(SHA1): {time.perf_counter() - t_h0:.4f}s  digest={fp_digest[:16]}…")
-
-            fight_summary: Optional[Dict[str, Any]] = None
-            pre_summary: Optional[Dict[str, Any]] = None
-            fight_vis = None
 
             if run_fight:
-                _ensure_fight_pre_runtime(template_box, model_box, device_box, transform_box, piece_db_box, equip_templates_box)
-                assert template_box[0] is not None and piece_db_box[0] is not None and equip_templates_box[0] is not None
+                assert _mobilenet_bundle_box[0] is not None
+                assert _bar_tpl_box[0] is not None and _equip_templates_box[0] is not None
 
-                fight = _run_one_fightboard_profiled(
-                    image_path=used_path,
-                    template=template_box[0],
-                    model=model_box[0],
-                    device=device_box[0],
-                    transform=transform_box[0],
-                    piece_db=piece_db_box[0],
-                    equip_templates=equip_templates_box[0],
-                    scales=scales_bar,
-                    min_roi=min_roi_bar,
-                    temp_out=tmp / f"{stem}_fight",
-                    tag=image_path.name,
-                    batch_embed=batch_embed,
-                    save_debug_crops=save_debug_crops,
-                    cross_bar_stage1_batch_embed=cross_bar_stage1,
-                )
-                if isinstance(fight.get("summary"), dict):
-                    fight["summary"]["file"] = image_path.name
-                fight_summary = fight["summary"]
-                fight_vis = fight["vis"]
+                chess_tmp = tmp / f"{stem}_fight_chess"
+                stitch_png = tmp / f"{stem}_player_stitch.png"
+
+                def _job_fight() -> Dict[str, Any]:
+                    return _run_fightboard_mobilenet_one(
+                        image_path=used_path,
+                        chess_tmp=chess_tmp,
+                        mobilenet_bundle=_mobilenet_bundle_box[0],
+                        bar_tpl=_bar_tpl_box[0],
+                        equip_templates=_equip_templates_box[0],
+                        scales_bar=scales_bar,
+                        min_roi=min_roi_bar,
+                        batch_embed=batch_embed,
+                        save_debug_crops=save_debug_crops,
+                        tag=image_path.name,
+                    )
+
+                def _job_eq() -> Dict[str, Any]:
+                    return _run_equip_column_on_path(used_path, col_templates, scales_col)
+
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    fut_f = ex.submit(_job_fight)
+                    fut_e = ex.submit(_job_eq)
+                    fight_summary = fut_f.result()
+                    eq_js = fut_e.result()
+
+                fight_summary["file"] = image_path.name
                 fight_by_stem[stem] = fight_summary
-                primary_fight_vis_by_stem[stem] = fight_vis
 
-                pre = _run_one_preboard_profiled(
-                    image_path=used_path,
-                    template=template_box[0],
-                    model=model_box[0],
-                    device=device_box[0],
-                    transform=transform_box[0],
-                    piece_db=piece_db_box[0],
-                    equip_templates=equip_templates_box[0],
-                    scales=scales_bar,
-                    min_roi=min_roi_bar,
-                    temp_out=tmp / f"{stem}_pre",
-                    tag=image_path.name,
-                    batch_embed=batch_embed,
-                    save_debug_crops=save_debug_crops,
-                    cross_bar_stage1_batch_embed=cross_bar_stage1,
-                )
-                if isinstance(pre.get("summary"), dict):
-                    pre["summary"]["file"] = image_path.name
-                pre_summary = pre["summary"]
-                pre_by_stem[stem] = pre_summary
+                t_pl0 = time.perf_counter()
+                pl = pon.run_once(used_path, None, stitch_png, ocr_engine=ocr_engine, bonds_only=False)
+                t_pl1 = time.perf_counter()
+                print(f"  [{image_path.name}] player_onnx 全 ROI: {t_pl1 - t_pl0:.4f}s")
+                pl = dict(pl)
+                pl["file"] = image_path.name
+                player_partial_by_stem[stem] = pl
 
-            t_sc0 = time.perf_counter()
-            scene_bgr = fb.cr._load_image(used_path)
-            t_sc1 = time.perf_counter()
-            print(f"  [{image_path.name}] 加载整图（equip_column 用）: {t_sc1 - t_sc0:.4f}s")
-            t_eq0 = time.perf_counter()
-            eq_js = ecr.compute_equip_column_matches(
-                scene_bgr,
-                templates=col_templates,
-                equip_roi=ecr.DEFAULT_EQUIP_ROI,
-                scales=scales_col,
-                threshold=0.6,
-                max_peaks_per_scale=4,
-                top_k=15,
-                nms_iou=0.35,
-                blue_buff_gap_min=0.05,
-                blue_buff_single_min_score=0.78,
-                grid_cols=2,
-                grid_rows=10,
-            )
-            t_eq1 = time.perf_counter()
-            mc = int((eq_js or {}).get("match_count") or 0)
-            print(
-                f"  [{image_path.name}] equip_column 竖条ROI切块 grid=2×10 匹配条目数={mc} "
-                f"耗时={t_eq1 - t_eq0:.4f}s"
-            )
-            equip_column_by_stem[stem] = eq_js
+                mc = int((eq_js or {}).get("match_count") or 0)
+                print(f"  [{image_path.name}] equip_column 匹配条目={mc}")
+                equip_column_by_stem[stem] = eq_js
+                raw_scene_by_stem[stem] = cr._load_image(used_path)
 
-            t_pl0 = time.perf_counter()
-            _, player_summary = pr.process_image(ocr_engine, used_path, centers, rects, 18)
-            t_pl1 = time.perf_counter()
-            print(f"  [{image_path.name}] player 全 ROI OCR/解析: {t_pl1 - t_pl0:.4f}s")
-
-            player_summary = dict(player_summary)
-            player_summary["file"] = image_path.name
-            player_by_stem[stem] = player_summary
-            gk = tcv._extract_group_key(stem, args.group_pattern)
-            player_by_group[gk].append(player_summary)
+            else:
+                stitch_png = tmp / f"{stem}_player_stitch.png"
+                t_pl0 = time.perf_counter()
+                pl = pon.run_once(used_path, None, stitch_png, ocr_engine=ocr_engine, bonds_only=True)
+                t_pl1 = time.perf_counter()
+                print(f"  [{image_path.name}] player_onnx 羁绊栏: {t_pl1 - t_pl0:.4f}s")
+                pl = dict(pl)
+                pl["file"] = image_path.name
+                player_partial_by_stem[stem] = pl
 
             print(f"  [V3] 本图合计耗时: {time.perf_counter() - t_img:.4f}s  ({image_path.name})")
 
     legend_trait_names = tcv._load_legend_trait_names(PROJECT_DIR / "data" / "rag_legend_traits.jsonl")
     group_traits_map: Dict[str, Dict[str, Any]] = {}
-    for gk, plist in player_by_group.items():
-        entries = [(str(p.get("file") or "unknown"), p) for p in sorted(plist, key=lambda x: str(x.get("file") or ""))]
-        group_traits_map[gk] = tcv._aggregate_bonds_from_player_entries(entries, legend_trait_names=legend_trait_names)
+    merged_player_by_primary: Dict[str, Dict[str, Any]] = {}
+
+    for gk, stem_list in stems_by_group.items():
+        stems_sorted = sorted(set(stem_list), key=lambda s: s)
+        primary = next((s for s in stems_sorted if tcv._stem_matches_fightboard_suffix(s, suffix)), None)
+        merged = _merge_player_group(primary, stems_sorted, player_partial_by_stem)
+        if merged is None:
+            continue
+        if primary:
+            merged_player_by_primary[primary] = merged
+        entries: List[Tuple[str, Dict[str, Any]]] = []
+        if primary and primary in merged_player_by_primary:
+            entries.append((str(merged_player_by_primary[primary].get("file") or primary), merged_player_by_primary[primary]))
+        else:
+            for s in stems_sorted:
+                if s in player_partial_by_stem:
+                    entries.append(
+                        (str(player_partial_by_stem[s].get("file") or s), player_partial_by_stem[s])
+                    )
+        if entries:
+            group_traits_map[gk] = tcv._aggregate_bonds_from_player_entries(
+                entries, legend_trait_names=legend_trait_names
+            )
 
     legend_chess = PROJECT_DIR / "data" / "rag_legend_chess.jsonl"
     legend_traits = PROJECT_DIR / "data" / "rag_legend_traits.jsonl"
@@ -876,8 +804,7 @@ def main() -> None:
             continue
         gk = tcv._extract_group_key(stem, args.group_pattern)
         fight_js = fight_by_stem.get(stem) or {}
-        pre_js = pre_by_stem.get(stem) or {}
-        player_main = player_by_stem.get(stem) or {}
+        player_main = merged_player_by_primary.get(stem) or player_partial_by_stem.get(stem) or {}
         eq_col = equip_column_by_stem.get(stem) or {}
         group_traits = group_traits_map.get(
             gk,
@@ -899,22 +826,23 @@ def main() -> None:
             legend_equip_path=legend_equip.resolve(),
         )
 
-        fight_vis = primary_fight_vis_by_stem.get(stem)
-        if fight_vis is None:
-            continue
+        raw_scene = raw_scene_by_stem.get(stem)
+        if raw_scene is None:
+            raw_scene = np.zeros((max(1, target_h), max(1, target_w), 3), dtype=np.uint8)
 
         lines = _summary_lines_v3_primary(
             fight_json=fight_js,
-            pre_json=pre_js,
             player_json_main=player_main,
             equip_col_json=eq_col,
             group_traits=group_traits,
             cv=cv,
         )
-        # 左侧仅保留 Fightboard 可视化（棋子/血条/棋盘侧装备），不叠 pre/player/equip_column
-        final_img = _draw_summary_panel(fight_vis, lines)
+        final_img = _draw_summary_panel(raw_scene, lines)
         out_png = out_root / f"{stem}_annotated.png"
-        bp._save_image(out_png, final_img)
+        _save_image(out_png, final_img)
+
+        conf_raw = cv.get("confirmed_results") or fight_js.get("results") or []
+        conf_slim = [_slim_fight_result_row(x) if isinstance(x, dict) else x for x in (conf_raw if isinstance(conf_raw, list) else [])]
 
         merged_json: Dict[str, Any] = {
             "pipeline": "battle_pipeline_v3",
@@ -922,16 +850,15 @@ def main() -> None:
             "group": gk,
             "annotated_image": out_png.name,
             "modules": {
-                "fightboard": fight_js,
-                "preboard": pre_js,
+                "fightboard": _slim_fightboard_module(fight_js),
                 "player": player_main,
                 "equip_column": eq_col,
             },
             "analysis": {
-                "group_traits_merged": group_traits,
-                "cross_validation": cv,
+                "group_traits_merged": _slim_group_traits_for_export(group_traits),
+                "cross_validation": _slim_cross_validation_for_export(cv),
             },
-            "confirmed_fightboard_results": cv.get("confirmed_results") or fight_js.get("results") or [],
+            "confirmed_fightboard_results": conf_slim,
         }
         (out_root / f"{stem}_summary.json").write_text(
             json.dumps(merged_json, ensure_ascii=False, indent=2),

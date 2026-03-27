@@ -19,6 +19,7 @@ equip_column_recog：装备栏（左侧竖条 ROI）模板匹配识别。
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import shutil
 from pathlib import Path
@@ -161,53 +162,6 @@ def _build_templates(gallery_dir: Path) -> List[Tuple[str, np.ndarray]]:
     return templates
 
 
-def _find_local_maxima(res: np.ndarray, threshold: float) -> List[Tuple[float, int, int]]:
-    """
-    在 matchTemplate 结果图 res 上找局部极大值，返回 [(score,x,y), ...]。
-    """
-    h, w = res.shape
-    if h < 2 or w < 2:
-        return []
-    padded = np.pad(res, 1, mode="edge")
-    mask = np.ones((h, w), dtype=bool)
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            if dx == 0 and dy == 0:
-                continue
-            mask &= res > padded[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w]
-    mask &= res >= threshold
-    ys, xs = np.where(mask)
-    peaks = [(float(res[y, x]), int(x), int(y)) for y, x in zip(ys, xs)]
-    peaks.sort(key=lambda t: t[0], reverse=True)
-    return peaks
-
-
-def _collect_peaks_for_template(
-    roi_g: np.ndarray,
-    tmpl_gray: np.ndarray,
-    scales: Sequence[int],
-    method: int,
-    threshold: float,
-    max_peaks_per_scale: int,
-) -> List[Tuple[float, int, int, int]]:
-    """
-    对单个模板（灰度）在 roi_g 内做多尺度匹配：
-    返回 [(score, x, y, side_win), ...]
-    其中 x/y 是 ROI 内坐标（与 matchTemplate 的左上角一致）。
-    """
-    h, w = roi_g.shape[:2]
-    out: List[Tuple[float, int, int, int]] = []
-    for s in scales:
-        if s < 2 or h < s or w < s:
-            continue
-        t = cv2.resize(tmpl_gray, (s, s), interpolation=cv2.INTER_AREA)
-        res = cv2.matchTemplate(roi_g, t, method)
-        peaks = _find_local_maxima(res, threshold)
-        for score, x, y in peaks[:max_peaks_per_scale]:
-            out.append((score, x, y, s))
-    return out
-
-
 def _equip_label_stem(template_filename: str) -> str:
     return Path(template_filename).stem
 
@@ -260,12 +214,88 @@ def _apply_spatula_special_case(
     return picked
 
 
+def _process_single_block(
+    block_idx: int,
+    bx1: int,
+    by1: int,
+    bx2: int,
+    by2: int,
+    scene_bgr: np.ndarray,
+    templates: List[Tuple[str, np.ndarray]],
+    scales_t: Tuple[int, ...],
+    method: int,
+    thr: float,
+    max_peaks: int,
+    tk: int,
+    nms_iou: float,
+    blue_buff_gap_min: float,
+    blue_buff_single_min_score: float,
+    min_roi: int,
+    skip_block_min_std: float,
+) -> List[Dict[str, Any]]:
+    """单块匹配：scene 切片为视图（不 copy），灰度后可选按标准差跳过。"""
+    roi_view = scene_bgr[by1:by2, bx1:bx2]
+    roi_g = er._to_gray(roi_view)
+    if roi_g.shape[1] < min_roi or roi_g.shape[0] < min_roi:
+        return []
+    if skip_block_min_std > 0 and float(np.std(roi_g)) < float(skip_block_min_std):
+        return []
+
+    candidates: List[Tuple[float, int, int, str, int]] = []
+    for name, tmpl_gray in templates:
+        peaks = er._collect_peaks_for_template(
+            roi_g,
+            tmpl_gray,
+            scales_t,
+            method,
+            thr,
+            max_peaks,
+        )
+        for score, x, y, side_win in peaks:
+            candidates.append((score, x, y, name, side_win))
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda t: float(t[0]), reverse=True)
+    boxes_xy = [(c[1], c[2], c[4], c[4]) for c in candidates]
+    scores = [float(c[0]) for c in candidates]
+    keep_idx = er._nms_xywh(boxes_xy, scores, nms_iou) if candidates else []
+    picked = [candidates[i] for i in keep_idx[:tk]]
+    picked = _apply_blue_buff_special_case(
+        picked,
+        gap_min=blue_buff_gap_min,
+        single_min_score=blue_buff_single_min_score,
+    )
+    picked = er._apply_spatula_special_case(picked)
+
+    region_index = block_idx + 1
+    out: List[Dict[str, Any]] = []
+    for rank, (score, x, y, tname, side_win) in enumerate(picked, start=1):
+        gx1 = bx1 + int(x)
+        gy1 = by1 + int(y)
+        stem_l = er._equip_label_stem(tname)
+        out.append(
+            {
+                "template_file": str(tname),
+                "name_stem": str(stem_l),
+                "score": float(score),
+                "global_x": int(gx1),
+                "global_y": int(gy1),
+                "side": int(side_win),
+                "roi_index": int(region_index),
+                "rank_in_block": int(rank),
+            }
+        )
+    return out
+
+
 def compute_equip_column_matches(
     scene_bgr: np.ndarray,
     *,
     templates: List[Tuple[str, np.ndarray]],
     equip_roi: Tuple[int, int, int, int] = DEFAULT_EQUIP_ROI,
-    scales: Sequence[int] = (60, 61, 62, 63, 64),
+    scales: Sequence[int] = (61, 62, 63),
     threshold: float = 0.6,
     max_peaks_per_scale: int = 4,
     top_k: int = 15,
@@ -273,7 +303,9 @@ def compute_equip_column_matches(
     blue_buff_gap_min: float = 0.05,
     blue_buff_single_min_score: float = 0.78,
     grid_cols: int = 2,
-    grid_rows: int = 10,
+    grid_rows: int = 5,
+    skip_block_min_std: float = 5.0,
+    block_workers: int = 4,
 ) -> Dict[str, Any]:
     """
     在整图 BGR 上识别左侧装备栏竖条 ROI，返回结构化结果（供 pipeline 写 JSON / 再叠加绘制）。
@@ -298,59 +330,55 @@ def compute_equip_column_matches(
     method = cv2.TM_CCOEFF_NORMED
     gc = max(1, int(grid_cols))
     gr = max(1, int(grid_rows))
+    bw = max(1, int(block_workers))
+    skip_std = float(skip_block_min_std)
 
     blocks = _split_roi_grid(rx1, ry1, rx2, ry2, cols=gc, rows=gr)
-    for block_idx, bx1, by1, bx2, by2 in blocks:
-        roi_crop = scene_bgr[by1:by2, bx1:bx2].copy()
-        roi_g = er._to_gray(roi_crop)
-        if roi_g.shape[1] < min_roi or roi_g.shape[0] < min_roi:
-            continue
 
-        candidates: List[Tuple[float, int, int, str, int]] = []
-        for name, tmpl_gray in templates:
-            peaks = er._collect_peaks_for_template(
-                roi_g,
-                tmpl_gray,
-                scales_t,
-                method,
-                thr,
-                max_peaks,
-            )
-            for score, x, y, side_win in peaks:
-                candidates.append((score, x, y, name, side_win))
-
-        if not candidates:
-            continue
-
-        candidates.sort(key=lambda t: float(t[0]), reverse=True)
-        boxes_xy = [(c[1], c[2], c[4], c[4]) for c in candidates]
-        scores = [float(c[0]) for c in candidates]
-        keep_idx = er._nms_xywh(boxes_xy, scores, nms_iou) if candidates else []
-        picked = [candidates[i] for i in keep_idx[:tk]]
-        picked = _apply_blue_buff_special_case(
-            picked,
-            gap_min=blue_buff_gap_min,
-            single_min_score=blue_buff_single_min_score,
+    def _run_block(
+        block_idx: int,
+        bx1: int,
+        by1: int,
+        bx2: int,
+        by2: int,
+    ) -> Tuple[int, List[Dict[str, Any]]]:
+        ms = _process_single_block(
+            block_idx,
+            bx1,
+            by1,
+            bx2,
+            by2,
+            scene_bgr,
+            templates,
+            scales_t,
+            method,
+            thr,
+            max_peaks,
+            tk,
+            nms_iou,
+            blue_buff_gap_min,
+            blue_buff_single_min_score,
+            min_roi,
+            skip_std,
         )
-        picked = er._apply_spatula_special_case(picked)
+        return block_idx, ms
 
-        region_index = block_idx + 1
-        for rank, (score, x, y, tname, side_win) in enumerate(picked, start=1):
-            gx1 = bx1 + int(x)
-            gy1 = by1 + int(y)
-            stem_l = er._equip_label_stem(tname)
-            out_matches.append(
-                {
-                    "template_file": str(tname),
-                    "name_stem": str(stem_l),
-                    "score": float(score),
-                    "global_x": int(gx1),
-                    "global_y": int(gy1),
-                    "side": int(side_win),
-                    "roi_index": int(region_index),
-                    "rank_in_block": int(rank),
-                }
-            )
+    if bw <= 1:
+        for block_idx, bx1, by1, bx2, by2 in blocks:
+            _, ms = _run_block(block_idx, bx1, by1, bx2, by2)
+            out_matches.extend(ms)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=bw) as ex:
+            futures = [
+                ex.submit(_run_block, block_idx, bx1, by1, bx2, by2)
+                for block_idx, bx1, by1, bx2, by2 in blocks
+            ]
+            pairs: List[Tuple[int, List[Dict[str, Any]]]] = []
+            for fut in futures:
+                pairs.append(fut.result())
+            pairs.sort(key=lambda p: p[0])
+            for _, ms in pairs:
+                out_matches.extend(ms)
 
     return {
         "equip_roi": [rx1, ry1, rx2, ry2],
@@ -412,12 +440,12 @@ def main() -> None:
     ap.add_argument("--gallery", type=Path, default=DEFAULT_GALLERY, help="装备图鉴目录（默认 equip_gallery/）")
     ap.add_argument("--equip-roi", default=f"{DEFAULT_EQUIP_ROI[0]},{DEFAULT_EQUIP_ROI[1]},{DEFAULT_EQUIP_ROI[2]},{DEFAULT_EQUIP_ROI[3]}", help="装备栏 ROI：x1,y1,x2,y2（全图坐标）")
 
-    # 装备栏竖条内图标：默认用边长 60~64 像素的正方形窗口做多尺度匹配（与 equip_recog 流程一致，仅尺度列表不同）。
+    # 装备栏竖条内图标：默认 3 档尺度以减耗时；可用 --scales 恢复 60~64 全档。
     ap.add_argument(
         "--scales",
         type=str,
-        default="60,61,62,63,64",
-        help="装备模板边长列表（匹配正方形：s*s 像素；默认 60~64）",
+        default="61,62,63",
+        help="装备模板边长列表（匹配正方形：s*s 像素；默认 61~63 三档）",
     )
     # 与 equip_recog 默认 0.78 不同：小窗口尺度下峰值分布会变，需按图调 --threshold。
     ap.add_argument("--threshold", type=float, default=0.6, help="模板匹配峰值下限（60~64 窗口可从 0.6 起试）")
@@ -435,7 +463,24 @@ def main() -> None:
     ap.add_argument("--label-font-size", type=int, default=12, help="中文标签字体大小")
     ap.add_argument("--max-label-chars", type=int, default=14, help="标签最大字符数（超过截断）")
     ap.add_argument("--grid-cols", type=int, default=2, help="装备栏 ROI 切块列数（默认 2）")
-    ap.add_argument("--grid-rows", type=int, default=10, help="装备栏 ROI 切块行数（默认 10）")
+    ap.add_argument(
+        "--grid-rows",
+        type=int,
+        default=5,
+        help="装备栏 ROI 切块行数（默认 5，即 2×5；更细可试 10，8 易与竖条行错位）",
+    )
+    ap.add_argument(
+        "--skip-block-min-std",
+        type=float,
+        default=5.0,
+        help="块灰度标准差低于该值则跳过模板匹配（更早跳过近似空块）；0 关闭",
+    )
+    ap.add_argument(
+        "--block-workers",
+        type=int,
+        default=4,
+        help="块级并行线程数（1 为顺序执行）",
+    )
     args = ap.parse_args()
 
     root = PROJECT_DIR
@@ -466,13 +511,13 @@ def main() -> None:
     max_label_chars = max(4, int(args.max_label_chars))
     grid_cols = max(1, int(args.grid_cols))
     grid_rows = max(1, int(args.grid_rows))
+    skip_block_min_std = float(args.skip_block_min_std)
+    block_workers = max(1, int(args.block_workers))
 
     # 复用 equip_recog.py 的图鉴读取/模板预处理，确保识别机制与原脚本一致
     templates = er._build_templates(gallery_dir)
     if not templates:
         raise SystemExit(f"图鉴无可用图片: {gallery_dir}")
-
-    method = cv2.TM_CCOEFF_NORMED
 
     csv_rows: List[List[str]] = []
     images = iter_input_images(img_dir, image_exts=IMAGE_EXTS)
@@ -489,91 +534,46 @@ def main() -> None:
             print(f"[跳过] {image_path.name}: equip-roi 裁剪为空")
             continue
 
-        vis = scene.copy()
-        cv2.rectangle(vis, (rx1, ry1), (rx2, ry2), (128, 128, 255), 2)
+        res = compute_equip_column_matches(
+            scene,
+            templates=templates,
+            equip_roi=(rx1, ry1, rx2, ry2),
+            scales=scales,
+            threshold=thr,
+            max_peaks_per_scale=max_peaks,
+            top_k=top_k,
+            nms_iou=nms_iou,
+            blue_buff_gap_min=gap_min,
+            blue_buff_single_min_score=blue_single_min,
+            grid_cols=grid_cols,
+            grid_rows=grid_rows,
+            skip_block_min_std=skip_block_min_std,
+            block_workers=block_workers,
+        )
+        matches = res["matches"]
+        total_picked = len(matches)
 
-        min_roi = max(scales)
-        Hv, Wv = vis.shape[:2]
+        vis = draw_equip_column_matches_on_bgr(
+            scene,
+            matches,
+            equip_roi=(rx1, ry1, rx2, ry2),
+            label_font_size=label_font_size,
+            max_label_chars=max_label_chars,
+        )
 
-        blocks = _split_roi_grid(rx1, ry1, rx2, ry2, cols=grid_cols, rows=grid_rows)
-        if not blocks:
-            print(f"[跳过] {image_path.name}: equip-roi 裁剪为空")
-            continue
-
-        total_picked = 0
-        for block_idx, bx1, by1, bx2, by2 in blocks:
-            # 每个切块内部做模板匹配：局部的 x/y 再映射回全局坐标
-            roi_crop = scene[by1:by2, bx1:bx2].copy()
-            roi_g = er._to_gray(roi_crop)
-            if roi_g.shape[1] < min_roi or roi_g.shape[0] < min_roi:
-                continue
-
-            candidates: List[Tuple[float, int, int, str, int]] = []
-            for name, tmpl_gray in templates:
-                peaks = er._collect_peaks_for_template(
-                    roi_g,
-                    tmpl_gray,
-                    scales,
-                    method,
-                    thr,
-                    max_peaks,
-                )
-                for score, x, y, side_win in peaks:
-                    candidates.append((score, x, y, name, side_win))
-
-            if not candidates:
-                continue
-
-            candidates.sort(key=lambda t: float(t[0]), reverse=True)
-            boxes_xy = [(c[1], c[2], c[4], c[4]) for c in candidates]
-            scores = [float(c[0]) for c in candidates]
-            keep_idx = er._nms_xywh(boxes_xy, scores, nms_iou) if candidates else []
-            picked = [candidates[i] for i in keep_idx[:top_k]]
-            picked = _apply_blue_buff_special_case(
-                picked,
-                gap_min=gap_min,
-                single_min_score=blue_single_min,
+        for m in matches:
+            csv_rows.append(
+                [
+                    image_path.name,
+                    str(m["roi_index"]),
+                    str(m["template_file"]),
+                    f"{float(m['score']):.6f}",
+                    str(m["global_x"]),
+                    str(m["global_y"]),
+                    str(m["side"]),
+                    str(m["rank_in_block"]),
+                ]
             )
-            picked = er._apply_spatula_special_case(picked)
-
-            total_picked += len(picked)
-            region_index = block_idx + 1  # 块索引从 1 开始
-            for rank, (score, x, y, tname, side_win) in enumerate(picked, start=1):
-                gx1 = bx1 + int(x)
-                gy1 = by1 + int(y)
-
-                cv2.rectangle(vis, (gx1, gy1), (gx1 + side_win, gy1 + side_win), (0, 255, 0), 1)
-
-                stem_l = er._equip_label_stem(tname)
-                if len(stem_l) > max_label_chars:
-                    stem_l = stem_l[: max_label_chars - 1] + "…"
-
-                label = f"{stem_l} {float(score):.2f}"
-                text_y = gy1 - 4
-                if text_y < label_font_size + 2:
-                    text_y = min(Hv - 2, gy1 + side_win + label_font_size + 2)
-                text_x = max(0, min(gx1, Wv - 1))
-
-                er._draw_chinese_text(
-                    vis,
-                    label,
-                    (text_x, text_y),
-                    font_size=label_font_size,
-                    color=(0, 255, 0),
-                )
-
-                csv_rows.append(
-                    [
-                        image_path.name,
-                        str(region_index),
-                        tname,
-                        f"{float(score):.6f}",
-                        str(gx1),
-                        str(gy1),
-                        str(side_win),
-                        str(rank),
-                    ]
-                )
 
         out_img = out_dir / f"{stem}_equipcol_annotated.png"
         _save_bgr(out_img, vis)
