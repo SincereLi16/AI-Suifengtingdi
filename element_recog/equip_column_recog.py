@@ -162,6 +162,30 @@ def _build_templates(gallery_dir: Path) -> List[Tuple[str, np.ndarray]]:
     return templates
 
 
+def build_tiered_templates(
+    gallery_dir: Path,
+    *,
+    tier_order: Sequence[str] = ("V0", "V1", "V2", "V3"),
+) -> Tuple[List[Tuple[str, np.ndarray]], Dict[str, int]]:
+    """
+    按分层目录顺序加载模板（V0 -> V1 -> V2 -> V3），返回：
+    - templates: [(template_file, template_gray), ...]
+    - tier_counts: {tier_name: count, ...}
+    说明：只加载子目录内图片；若某层不存在则计数为 0。
+    """
+    templates: List[Tuple[str, np.ndarray]] = []
+    tier_counts: Dict[str, int] = {}
+    for tier in tier_order:
+        tier_dir = gallery_dir / str(tier)
+        if not tier_dir.is_dir():
+            tier_counts[str(tier)] = 0
+            continue
+        one_tier = _build_templates(tier_dir)
+        templates.extend(one_tier)
+        tier_counts[str(tier)] = len(one_tier)
+    return templates, tier_counts
+
+
 def _equip_label_stem(template_filename: str) -> str:
     return Path(template_filename).stem
 
@@ -232,6 +256,10 @@ def _process_single_block(
     blue_buff_single_min_score: float,
     min_roi: int,
     skip_block_min_std: float,
+    template_early_stop_score: float,
+    template_early_stop_gap: float,
+    template_early_stop_min_hits: int,
+    scale_early_stop_score: float,
 ) -> List[Dict[str, Any]]:
     """单块匹配：scene 切片为视图（不 copy），灰度后可选按标准差跳过。"""
     roi_view = scene_bgr[by1:by2, bx1:bx2]
@@ -242,17 +270,37 @@ def _process_single_block(
         return []
 
     candidates: List[Tuple[float, int, int, str, int]] = []
+    best1 = -1.0
+    best2 = -1.0
+    min_hits = max(1, int(template_early_stop_min_hits))
     for name, tmpl_gray in templates:
-        peaks = er._collect_peaks_for_template(
-            roi_g,
-            tmpl_gray,
-            scales_t,
-            method,
-            thr,
-            max_peaks,
-        )
+        peaks: List[Tuple[float, int, int, int]] = []
+        for s in scales_t:
+            if s < 2 or roi_g.shape[0] < s or roi_g.shape[1] < s:
+                continue
+            t = cv2.resize(tmpl_gray, (s, s), interpolation=cv2.INTER_AREA)
+            res = cv2.matchTemplate(roi_g, t, method)
+            one_scale = er._find_local_maxima(res, thr)
+            if one_scale:
+                for score, x, y in one_scale[:max_peaks]:
+                    peaks.append((score, x, y, s))
+                # 模板内尺度早停：命中高置信后不再继续试其它尺度
+                if scale_early_stop_score > 0 and float(one_scale[0][0]) >= float(scale_early_stop_score):
+                    break
         for score, x, y, side_win in peaks:
-            candidates.append((score, x, y, name, side_win))
+            score_f = float(score)
+            candidates.append((score_f, x, y, name, side_win))
+            if score_f > best1:
+                best2 = best1
+                best1 = score_f
+            elif score_f > best2:
+                best2 = score_f
+
+        # 块内模板早停：已有高置信且与次优拉开间隔，且候选数达到下限
+        if template_early_stop_score > 0 and len(candidates) >= min_hits:
+            gap = best1 - max(best2, 0.0)
+            if best1 >= float(template_early_stop_score) and gap >= float(template_early_stop_gap):
+                break
 
     if not candidates:
         return []
@@ -298,14 +346,18 @@ def compute_equip_column_matches(
     scales: Sequence[int] = (61, 62, 63),
     threshold: float = 0.6,
     max_peaks_per_scale: int = 4,
-    top_k: int = 15,
+    top_k: int = 5,
     nms_iou: float = 0.35,
     blue_buff_gap_min: float = 0.05,
     blue_buff_single_min_score: float = 0.78,
     grid_cols: int = 2,
-    grid_rows: int = 5,
+    grid_rows: int = 10,
     skip_block_min_std: float = 5.0,
     block_workers: int = 4,
+    template_early_stop_score: float = 0.90,
+    template_early_stop_gap: float = 0.08,
+    template_early_stop_min_hits: int = 2,
+    scale_early_stop_score: float = 0.92,
 ) -> Dict[str, Any]:
     """
     在整图 BGR 上识别左侧装备栏竖条 ROI，返回结构化结果（供 pipeline 写 JSON / 再叠加绘制）。
@@ -360,6 +412,10 @@ def compute_equip_column_matches(
             blue_buff_single_min_score,
             min_roi,
             skip_std,
+            float(template_early_stop_score),
+            float(template_early_stop_gap),
+            int(template_early_stop_min_hits),
+            float(scale_early_stop_score),
         )
         return block_idx, ms
 
@@ -450,8 +506,33 @@ def main() -> None:
     # 与 equip_recog 默认 0.78 不同：小窗口尺度下峰值分布会变，需按图调 --threshold。
     ap.add_argument("--threshold", type=float, default=0.6, help="模板匹配峰值下限（60~64 窗口可从 0.6 起试）")
     ap.add_argument("--max-peaks-per-scale", type=int, default=4, help="每个模板每个尺度最多取峰值数量")
-    ap.add_argument("--top-k", type=int, default=15, help="最终每张图最多输出的匹配数量（按分数排序）")
+    ap.add_argument("--top-k", type=int, default=5, help="最终每张图最多输出的匹配数量（按分数排序）")
     ap.add_argument("--nms-iou", type=float, default=0.35, help="NMS IoU 阈值")
+
+    ap.add_argument(
+        "--template-early-stop-score",
+        type=float,
+        default=0.90,
+        help="块内模板早停：候选最高分≥该值且与次优分差≥gap 时不再扫后续模板；0 关闭",
+    )
+    ap.add_argument(
+        "--template-early-stop-gap",
+        type=float,
+        default=0.08,
+        help="块内模板早停：top1-top2 最小分差",
+    )
+    ap.add_argument(
+        "--template-early-stop-min-hits",
+        type=int,
+        default=2,
+        help="块内模板早停：至少已累积这么多条候选后才允许早停",
+    )
+    ap.add_argument(
+        "--scale-early-stop-score",
+        type=float,
+        default=0.92,
+        help="单模板多尺度早停：某尺度峰值≥该值则不再试该模板更大/更小尺度；0 关闭",
+    )
 
     ap.add_argument("--blue-buff-gap-min", type=float, default=0.05, help="蓝霸符专项：top1-top2 分差下限；小于则过滤本 ROI")
     ap.add_argument(
@@ -466,8 +547,8 @@ def main() -> None:
     ap.add_argument(
         "--grid-rows",
         type=int,
-        default=5,
-        help="装备栏 ROI 切块行数（默认 5，即 2×5；更细可试 10，8 易与竖条行错位）",
+        default=10,
+        help="装备栏 ROI 切块行数（默认 10，与 battle_pipeline_v3 一致；可改小减负）",
     )
     ap.add_argument(
         "--skip-block-min-std",
@@ -513,11 +594,21 @@ def main() -> None:
     grid_rows = max(1, int(args.grid_rows))
     skip_block_min_std = float(args.skip_block_min_std)
     block_workers = max(1, int(args.block_workers))
+    tes = float(args.template_early_stop_score)
+    teg = float(args.template_early_stop_gap)
+    temh = max(1, int(args.template_early_stop_min_hits))
+    ses = float(args.scale_early_stop_score)
 
-    # 复用 equip_recog.py 的图鉴读取/模板预处理，确保识别机制与原脚本一致
-    templates = er._build_templates(gallery_dir)
+    templates, tier_counts = build_tiered_templates(gallery_dir)
+    if not templates:
+        templates = er._build_templates(gallery_dir)
     if not templates:
         raise SystemExit(f"图鉴无可用图片: {gallery_dir}")
+    print(
+        "[equip_column] 模板分层: "
+        + ", ".join(f"{k}={int(v)}" for k, v in tier_counts.items())
+        + f" | total={len(templates)}"
+    )
 
     csv_rows: List[List[str]] = []
     images = iter_input_images(img_dir, image_exts=IMAGE_EXTS)
@@ -549,6 +640,10 @@ def main() -> None:
             grid_rows=grid_rows,
             skip_block_min_std=skip_block_min_std,
             block_workers=block_workers,
+            template_early_stop_score=tes,
+            template_early_stop_gap=teg,
+            template_early_stop_min_hits=temh,
+            scale_early_stop_score=ses,
         )
         matches = res["matches"]
         total_picked = len(matches)

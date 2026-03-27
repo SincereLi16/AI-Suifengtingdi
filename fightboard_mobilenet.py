@@ -34,6 +34,7 @@ import numpy as np
 
 from element_recog import chess_recog as cr
 from element_recog import equip_recog as er
+from element_recog import equip_column_recog as ecr_col
 from element_recog import bars_recog as br
 from element_recog.chess_recog import (
     BELOW_BAR_PX,
@@ -335,6 +336,43 @@ def _print_timing_block(title: str, timings: Dict[str, float]) -> None:
         print(f"  {key}: {disp}")
 
 
+def _dirty_roi_for_bar_sketch(
+    scene_h: int,
+    scene_w: int,
+    *,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    r: int,
+    crop_base_bias_x: int,
+    crop_base_bias_y: int,
+) -> Tuple[int, int, int, int]:
+    """
+    单条血条在 Stage1/2 中可能绘制的框、采样圆、上侧标签的保守外包矩形。
+    用于失败时只回滚小块，避免每 bar 对整幅 mark 做 copy。
+    """
+    xs: List[int] = [int(x), int(x + w)]
+    ys: List[int] = [int(y), int(y + h), max(0, int(y) - 52)]
+    base_cx0 = int(x + w // 2 + CENTER_OFFSET_X + crop_base_bias_x)
+    base_cy0 = int(y + h + crop_base_bias_y)
+    for dx, dy in list(DEFAULT_SAMPLES) + list(EXTRA_SAMPLES):
+        cx = base_cx0 + int(dx)
+        cy = base_cy0 + int(dy)
+        xs.extend([cx - r, cx + r])
+        ys.extend([cy - r, cy + r])
+    pad = 6
+    rx1 = max(0, min(xs) - pad)
+    rx2 = min(int(scene_w), max(xs) + pad)
+    ry1 = max(0, min(ys) - pad)
+    ry2 = min(int(scene_h), max(ys) + pad)
+    if rx2 <= rx1:
+        rx2 = min(int(scene_w), rx1 + 1)
+    if ry2 <= ry1:
+        ry2 = min(int(scene_h), ry1 + 1)
+    return rx1, ry1, rx2, ry2
+
+
 def _select_torch_device(
     torch_device: str = "auto",
     prefer_rocm: bool = False,
@@ -436,6 +474,8 @@ def run_recognition_chess(
     torch_auto_priority: str = "dml,cuda,cpu",
     torch_fallback_to_cpu: bool = True,
     print_timings: bool = True,
+    save_annotated_png: bool = True,
+    fast_bar_mark_rollback: bool = True,
     bar_width_snap: bool = True,
     bar_snap_width: int = FIGHTBOARD_BAR_SNAP_WIDTH_DEFAULT,
     bar_clip_to_content: bool = True,
@@ -565,8 +605,32 @@ def run_recognition_chess(
         q_list = _embed_mobilenet_bgr_batch(bgrs, mobilenet_model, mobilenet_device, mobilenet_transform)
         return [_topk_cosine(q, db_names, db_mat, topk=int(topk_raw)) for q in q_list]
 
+    Hm, Wm = int(mark.shape[0]), int(mark.shape[1])
     for bi, (x, y, w, h) in enumerate(boxes):
-        mark_before = mark.copy()
+        if bool(fast_bar_mark_rollback):
+            drx1, dry1, drx2, dry2 = _dirty_roi_for_bar_sketch(
+                Hm,
+                Wm,
+                x=int(x),
+                y=int(y),
+                w=int(w),
+                h=int(h),
+                r=int(r),
+                crop_base_bias_x=int(crop_base_bias_x),
+                crop_base_bias_y=int(crop_base_bias_y),
+            )
+            patch_backup = mark[dry1:dry2, drx1:drx2].copy()
+
+            def _revert_bar_sketch() -> None:
+                mark[dry1:dry2, drx1:drx2] = patch_backup
+
+        else:
+            mark_before = mark.copy()
+
+            def _revert_bar_sketch() -> None:
+                nonlocal mark
+                mark = mark_before
+
         cv2.rectangle(mark, (x, y), (x + w, y + h), (0, 255, 0), 2)
         base_cx = x + w // 2 + CENTER_OFFSET_X + crop_base_bias_x
         base_cy = y + h + crop_base_bias_y
@@ -795,7 +859,7 @@ def run_recognition_chess(
                 per_samples = per_samples2
 
         if int(used_samples) <= 0:
-            mark = mark_before
+            _revert_bar_sketch()
             continue
 
         if int(y) <= int(TOP_ZONE_MAX_Y_ABS) and (best not in TOP_ZONE_ALLOWED_LABELS):
@@ -808,7 +872,7 @@ def run_recognition_chess(
                     "reason": "top_zone_non_whitelist",
                 }
             )
-            mark = mark_before
+            _revert_bar_sketch()
             continue
 
         if stage == "stage2" and stage2_detail:
@@ -818,7 +882,7 @@ def run_recognition_chess(
                 if fr.get("method") == "stage2_retry_min_sim":
                     wms = float(fr.get("winner_max_sim", -1.0))
                     if wms < 0.67:
-                        mark = mark_before
+                        _revert_bar_sketch()
                         continue
 
         results.append(
@@ -900,9 +964,10 @@ def run_recognition_chess(
     prof["position_mapping"] = time.perf_counter() - t_seg
     t_seg = time.perf_counter()
 
-    mark_suffix = "MobileNetV3_标记.png"
-    mark_path = output_dir / f"{img_path.stem}_{mark_suffix}"
-    _save_image(mark, mark_path)
+    if bool(save_annotated_png):
+        mark_suffix = "MobileNetV3_标记.png"
+        mark_path = output_dir / f"{img_path.stem}_{mark_suffix}"
+        _save_image(mark, mark_path)
 
     prof["save_outputs"] = time.perf_counter() - t_seg
     prof["total_recognition"] = time.perf_counter() - t_prof0
@@ -1134,6 +1199,9 @@ def _get_worker_equip_templates(equip_gallery_dir: Path) -> List[Tuple[str, Any]
     if hit is not None:
         return hit
     templates = er._build_templates(equip_gallery_dir)
+    if not templates:
+        # 图鉴仅存在于分层子目录 V0~V3 时，根目录直扫为空
+        templates, _tier = ecr_col.build_tiered_templates(equip_gallery_dir)
     if not templates:
         raise RuntimeError(f"equip-gallery 无可用图片: {equip_gallery_dir}")
     _WORKER_CACHE[key] = templates

@@ -1,0 +1,168 @@
+{
+  "images": 8,
+  "device": "auto",
+  "total_s_off": 14.2495,
+  "total_s_on": 15.0048,
+  "avg_ms_off": 1781.19,
+  "avg_ms_on": 1875.6,
+  "avg_delta_ms": 94.41,
+  "files_with_bond_diff": 7,
+  "rows": [
+    {
+      "file": "01-a.png",
+      "ms_off": 2546.85,
+      "ms_on": 2389.64,
+      "delta_ms": -157.21,
+      "bond_items_off": [],
+      "bond_items_on": [
+        "1护卫",
+        "1征服者",
+        "1裁决战士",
+        "1祖安",
+        "1迅击战士",
+        "1枪手",
+        "1艾欧尼亚"
+      ],
+      "bond_diff": true,
+      "bond_left_digit_patches": 7
+    },
+    {
+      "file": "01-b.png",
+      "ms_off": 2197.98,
+      "ms_on": 2392.66,
+      "delta_ms": 194.68,
+      "bond_items_off": [],
+      "bond_items_on": [
+        "1祖安",
+        "1迅击战士",
+        "1枪手",
+        "1艾欧尼亚",
+        "1皮尔特沃夫",
+        "1弗雷尔卓德",
+        "1比尔吉沃特"
+      ],
+      "bond_diff": true,
+      "bond_left_digit_patches": 7
+    },
+    {
+      "file": "02-a.png",
+      "ms_off": 1727.99,
+      "ms_on": 1907.86,
+      "delta_ms": 179.87,
+      "bond_items_off": [
+        "2裁决战士"
+      ],
+      "bond_items_on": [
+        "2裁决战士",
+        "2弗雷尔卓德",
+        "1护卫",
+        "1征服者",
+        "1祖安",
+        "1枪手"
+      ],
+      "bond_diff": true,
+      "bond_left_digit_patches": 5
+    },
+    {
+      "file": "02-b.png",
+      "ms_off": 1927.16,
+      "ms_on": 2091.96,
+      "delta_ms": 164.79,
+      "bond_items_off": [],
+      "bond_items_on": [
+        "1迅击战士",
+        "1枪手",
+        "1诺克萨斯",
+        "1艾欧尼亚",
+        "1皮尔特沃夫",
+        "1德玛西亚",
+        "1比尔吉沃特"
+      ],
+      "bond_diff": true,
+      "bond_left_digit_patches": 7
+    },
+    {
+      "file": "03-a.png",
+      "ms_off": 1015.27,
+      "ms_on": 1077.94,
+      "delta_ms": 62.66,
+      "bond_items_off": [
+        "3诺克萨斯",
+        "2征服者",
+        "2裁决战士",
+        "2神盾使"
+      ],
+      "bond_items_on": [
+        "3诺克萨斯",
+        "3比尔吉沃特",
+        "2征服者",
+        "2裁决战士",
+        "2神盾使",
+        "1护卫"
+      ],
+      "bond_diff": true,
+      "bond_left_digit_patches": 2
+    },
+    {
+      "file": "03-b.png",
+      "ms_off": 1935.59,
+      "ms_on": 2067.01,
+      "delta_ms": 131.42,
+      "bond_items_off": [],
+      "bond_items_on": [
+        "2护卫",
+        "1祖安",
+        "1主宰",
+        "1枪手",
+        "1斗士",
+        "1德玛西亚"
+      ],
+      "bond_diff": true,
+      "bond_left_digit_patches": 6
+    },
+    {
+      "file": "04-a.png",
+      "ms_off": 1232.45,
+      "ms_on": 1248.18,
+      "delta_ms": 15.73,
+      "bond_items_off": [
+        "1符文法师",
+        "1山隐之焰",
+        "3神盾使",
+        "4诺克萨斯",
+        "2征服者",
+        "2主宰"
+      ],
+      "bond_items_on": [
+        "1符文法师",
+        "1山隐之焰",
+        "3神盾使",
+        "4诺克萨斯",
+        "2征服者",
+        "2主宰"
+      ],
+      "bond_diff": false,
+      "bond_left_digit_patches": 0
+    },
+    {
+      "file": "04-b.png",
+      "ms_off": 1666.21,
+      "ms_on": 1829.57,
+      "delta_ms": 163.36,
+      "bond_items_off": [
+        "2主宰"
+      ],
+      "bond_items_on": [
+        "2主宰",
+        "1裁决战士",
+        "1法师",
+        "1枪手",
+        "1斗士",
+        "1皮尔特沃夫",
+        "1德玛西亚"
+      ],
+      "bond_diff": true,
+      "bond_left_digit_patches": 6
+    }
+  ]
+}

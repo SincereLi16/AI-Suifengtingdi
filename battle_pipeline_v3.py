@@ -172,10 +172,11 @@ def _format_board_position(pos_obj: Any) -> str:
 
 
 def _fightboard_pipe_lines(fight_json: Optional[Dict[str, Any]]) -> List[str]:
-    """棋盘：棋子名称 | 位置 | 所携带装备"""
+    """棋盘：棋子名称 | 位置 | 所携带装备（results + equip_by_bar 来自同一 summary）"""
     lines: List[str] = []
-    fr = (fight_json or {}).get("results") or []
-    equip_by_bar = (fight_json or {}).get("equip_by_bar") or {}
+    fj = fight_json or {}
+    fr = fj.get("results") or []
+    equip_by_bar = fj.get("equip_by_bar") or {}
     if not fr:
         lines.append("(无棋子)")
         return lines
@@ -384,13 +385,14 @@ def _bond_lines_and_tcv(
     group_traits: Dict[str, Any],
     cv: Dict[str, Any],
 ) -> List[str]:
-    """羁绊：种类数、n羁绊名（如 1弗雷尔卓德）、TCV（精简）。"""
+    """羁绊：种类数、各羁绊分行展示、TCV（精简）。"""
     lines: List[str] = []
     tm = group_traits.get("trait_count_max") or {}
     if isinstance(tm, dict) and tm:
         lines.append(f"种类数: {len(tm)}")
-        bond_parts = [f"{int(n)}{t}" for t, n in sorted(tm.items(), key=lambda kv: kv[0])]
-        lines.append("羁绊: " + "、".join(bond_parts))
+        lines.append("羁绊:")
+        for t, n in sorted(tm.items(), key=lambda kv: kv[0]):
+            lines.append(f"  {int(n)}{t}")
     else:
         lines.append("种类数: 0")
         lines.append("羁绊: (无)")
@@ -414,7 +416,13 @@ def _summary_lines_v3_primary(
     lines.extend(_bond_lines_and_tcv(group_traits, cv))
     lines.append("")
     lines.append("【棋盘】")
-    lines.extend(_fightboard_pipe_lines(fight_json))
+    fj = fight_json or {}
+    equip_by_bar = fj.get("equip_by_bar") or {}
+    conf_rows = cv.get("confirmed_results")
+    if isinstance(conf_rows, list) and conf_rows:
+        lines.extend(_fightboard_pipe_lines({"results": conf_rows, "equip_by_bar": equip_by_bar}))
+    else:
+        lines.extend(_fightboard_pipe_lines(fight_json))
     lines.append("")
     lines.append("【装备栏】")
     lines.extend(_equip_column_text_lines(equip_col_json))
@@ -428,23 +436,15 @@ def _run_equip_column_on_path(
     image_path: Path,
     col_templates: Sequence[Tuple[str, Any]],
     scales_col: Sequence[int],
+    *,
+    block_workers: int = 4,
 ) -> Dict[str, Any]:
     scene_bgr = cr._load_image(image_path)
     return ecr.compute_equip_column_matches(
         scene_bgr,
         templates=list(col_templates),
-        equip_roi=ecr.DEFAULT_EQUIP_ROI,
         scales=tuple(scales_col),
-        threshold=0.6,
-        max_peaks_per_scale=4,
-        top_k=15,
-        nms_iou=0.35,
-        blue_buff_gap_min=0.05,
-        blue_buff_single_min_score=0.78,
-        grid_cols=2,
-        grid_rows=10,
-        skip_block_min_std=0.0,
-        block_workers=1,
+        block_workers=max(1, int(block_workers)),
     )
 
 
@@ -459,6 +459,7 @@ def _run_fightboard_mobilenet_one(
     min_roi: int,
     batch_embed: bool,
     save_debug_crops: bool,
+    save_chess_mark_png: bool,
     tag: str,
 ) -> Dict[str, Any]:
     """
@@ -487,6 +488,7 @@ def _run_fightboard_mobilenet_one(
         torch_auto_priority="dml,cuda,cpu",
         torch_fallback_to_cpu=True,
         print_timings=True,
+        save_annotated_png=bool(save_chess_mark_png),
     )
     print(f"  [{tag}] fightboard chess_recog(MobileNet): {time.perf_counter() - t_c0:.4f}s")
 
@@ -631,9 +633,31 @@ def main() -> None:
         action="store_true",
         help="写出 chess_recog 调试图 crops（较慢）",
     )
+    ap.add_argument(
+        "--equip-column-block-workers",
+        type=int,
+        default=4,
+        help="equip_column ROI 切块并行线程数（默认 4；与 fightboard/player 三路并行时可能抢 CPU，可按机器调小）",
+    )
+    ap.add_argument(
+        "--chess-save-mark-png",
+        action="store_true",
+        help="写出 chess 临时目录内 MobileNetV3_标记.png（默认关闭以省 ~50–70ms/图）",
+    )
+    ap.add_argument(
+        "--serial-player",
+        action="store_true",
+        help=(
+            "主图：player_onnx 在 fightboard+equip 之后再跑（二路并行结束后串行 OCR），"
+            "减轻同卡 DML 争用；默认三路并行以压低墙钟（≈max 三者）。"
+        ),
+    )
     args = ap.parse_args()
     batch_embed = not bool(args.no_batch_embed)
     save_debug_crops = bool(args.save_debug_crops)
+    equip_col_bw = max(1, int(args.equip_column_block_workers))
+    chess_save_mark_png = bool(args.chess_save_mark_png)
+    parallel_player = not bool(args.serial_player)
 
     img_dir = args.img_dir.resolve()
     out_root = args.out.resolve()
@@ -650,7 +674,7 @@ def main() -> None:
 
     scales_bar = [24, 25, 26, 27, 28]
     min_roi_bar = max(scales_bar)
-    scales_col = (60, 61, 62, 63, 64)
+    scales_col = (61, 62, 63)
 
     need_fight = any(tcv._stem_matches_fightboard_suffix(p.stem, suffix) for p in images)
     if not need_fight:
@@ -662,9 +686,16 @@ def main() -> None:
     _pon_name, pon_kwargs = _configure_pipeline_devices()
     ocr_engine = pon.create_ocr_engine(pon_kwargs)
 
-    col_templates = er._build_templates(PROJECT_DIR / "equip_gallery")
+    col_templates, col_tier_counts = ecr.build_tiered_templates(PROJECT_DIR / "equip_gallery")
     if not col_templates:
         raise SystemExit(f"装备图鉴为空: {PROJECT_DIR / 'equip_gallery'}")
+    print(
+        "[V3] equip_column 模板分层: "
+        + ", ".join(f"{k}={int(v)}" for k, v in col_tier_counts.items())
+        + f" | total={len(col_templates)} | block_workers={equip_col_bw}"
+    )
+    if args.serial_player:
+        print("[V3] player_onnx：已启用 --serial-player（fight+equip 并行结束后再跑 OCR）。")
 
     t0_all = time.perf_counter()
     print(f"[V3] 初始化完成 ({t0_all:.1f}s 起算)")
@@ -701,6 +732,7 @@ def main() -> None:
                 print(f"[V3] 处理 {image_path.name}（辅图 · 羁绊栏 player_onnx）…")
 
             t_img = time.perf_counter()
+            phase_sec: Dict[str, float] = {}
 
             if run_fight:
                 assert _mobilenet_bundle_box[0] is not None
@@ -710,7 +742,8 @@ def main() -> None:
                 stitch_png = tmp / f"{stem}_player_stitch.png"
 
                 def _job_fight() -> Dict[str, Any]:
-                    return _run_fightboard_mobilenet_one(
+                    t0 = time.perf_counter()
+                    out = _run_fightboard_mobilenet_one(
                         image_path=used_path,
                         chess_tmp=chess_tmp,
                         mobilenet_bundle=_mobilenet_bundle_box[0],
@@ -720,25 +753,51 @@ def main() -> None:
                         min_roi=min_roi_bar,
                         batch_embed=batch_embed,
                         save_debug_crops=save_debug_crops,
+                        save_chess_mark_png=chess_save_mark_png,
                         tag=image_path.name,
                     )
+                    phase_sec["fightboard_total"] = time.perf_counter() - t0
+                    return out
 
                 def _job_eq() -> Dict[str, Any]:
-                    return _run_equip_column_on_path(used_path, col_templates, scales_col)
+                    t0 = time.perf_counter()
+                    out = _run_equip_column_on_path(
+                        used_path, col_templates, scales_col, block_workers=equip_col_bw
+                    )
+                    phase_sec["equip_column_total"] = time.perf_counter() - t0
+                    return out
 
-                with ThreadPoolExecutor(max_workers=2) as ex:
-                    fut_f = ex.submit(_job_fight)
-                    fut_e = ex.submit(_job_eq)
-                    fight_summary = fut_f.result()
-                    eq_js = fut_e.result()
+                def _job_player() -> Dict[str, Any]:
+                    t0 = time.perf_counter()
+                    out = pon.run_once(used_path, None, stitch_png, ocr_engine=ocr_engine, bonds_only=False)
+                    phase_sec["player_onnx_all_roi"] = time.perf_counter() - t0
+                    return out
+
+                t_par0 = time.perf_counter()
+                if parallel_player:
+                    with ThreadPoolExecutor(max_workers=3) as ex:
+                        fut_f = ex.submit(_job_fight)
+                        fut_e = ex.submit(_job_eq)
+                        fut_p = ex.submit(_job_player)
+                        fight_summary = fut_f.result()
+                        eq_js = fut_e.result()
+                        pl = fut_p.result()
+                    phase_sec["fight_eq_player_parallel_wait"] = time.perf_counter() - t_par0
+                    phase_sec["fight_eq_parallel_wait"] = phase_sec["fight_eq_player_parallel_wait"]
+                else:
+                    with ThreadPoolExecutor(max_workers=2) as ex:
+                        fut_f = ex.submit(_job_fight)
+                        fut_e = ex.submit(_job_eq)
+                        fight_summary = fut_f.result()
+                        eq_js = fut_e.result()
+                    phase_sec["fight_eq_parallel_wait"] = time.perf_counter() - t_par0
+                    phase_sec["fight_eq_player_parallel_wait"] = phase_sec["fight_eq_parallel_wait"]
+                    pl = _job_player()
 
                 fight_summary["file"] = image_path.name
                 fight_by_stem[stem] = fight_summary
 
-                t_pl0 = time.perf_counter()
-                pl = pon.run_once(used_path, None, stitch_png, ocr_engine=ocr_engine, bonds_only=False)
-                t_pl1 = time.perf_counter()
-                print(f"  [{image_path.name}] player_onnx 全 ROI: {t_pl1 - t_pl0:.4f}s")
+                print(f"  [{image_path.name}] player_onnx 全 ROI: {phase_sec.get('player_onnx_all_roi', 0.0):.4f}s")
                 pl = dict(pl)
                 pl["file"] = image_path.name
                 player_partial_by_stem[stem] = pl
@@ -746,7 +805,9 @@ def main() -> None:
                 mc = int((eq_js or {}).get("match_count") or 0)
                 print(f"  [{image_path.name}] equip_column 匹配条目={mc}")
                 equip_column_by_stem[stem] = eq_js
+                t_sc0 = time.perf_counter()
                 raw_scene_by_stem[stem] = cr._load_image(used_path)
+                phase_sec["load_raw_scene"] = time.perf_counter() - t_sc0
 
             else:
                 stitch_png = tmp / f"{stem}_player_stitch.png"
@@ -758,7 +819,69 @@ def main() -> None:
                 pl["file"] = image_path.name
                 player_partial_by_stem[stem] = pl
 
-            print(f"  [V3] 本图合计耗时: {time.perf_counter() - t_img:.4f}s  ({image_path.name})")
+            img_total = time.perf_counter() - t_img
+            print(f"  [V3] 本图合计耗时: {img_total:.4f}s  ({image_path.name})")
+            if run_fight:
+                par2 = float(phase_sec.get("fight_eq_parallel_wait", 0.0))
+                par_wall = float(phase_sec.get("fight_eq_player_parallel_wait", par2))
+                load_sc = float(phase_sec.get("load_raw_scene", 0.0))
+                pl_total = float(phase_sec.get("player_onnx_all_roi", 0.0))
+                if parallel_player:
+                    known_sum = par_wall + load_sc
+                else:
+                    known_sum = par2 + pl_total + load_sc
+                residual = max(0.0, img_total - known_sum)
+                fight_total = float(phase_sec.get("fightboard_total", 0.0))
+                eq_total = float(phase_sec.get("equip_column_total", 0.0))
+                print(f"  [{image_path.name}] V3阶段拆分:")
+                if parallel_player:
+                    cand = [("fightboard", fight_total), ("equip_column", eq_total), ("player_onnx", pl_total)]
+                    critical = max(cand, key=lambda x: x[1])[0]
+                    print(
+                        f"    - 并行段(fightboard+equip_column+player wall): {par_wall:.4f}s"
+                        f" ({(par_wall / max(img_total, 1e-9) * 100.0):.1f}%)"
+                    )
+                    print(
+                        f"      · fightboard_total: {fight_total:.4f}s"
+                        f" ({(fight_total / max(img_total, 1e-9) * 100.0):.1f}%)"
+                    )
+                    print(
+                        f"      · equip_column_total: {eq_total:.4f}s"
+                        f" ({(eq_total / max(img_total, 1e-9) * 100.0):.1f}%)"
+                    )
+                    print(
+                        f"      · player_onnx 全 ROI(线程内耗时): {pl_total:.4f}s"
+                        f" ({(pl_total / max(img_total, 1e-9) * 100.0):.1f}%)"
+                    )
+                    print(
+                        f"      · critical_path(按单任务耗时): {critical}"
+                        f" | 并行墙钟≈max(三任务，含设备争用)"
+                    )
+                else:
+                    print(
+                        f"    - 并行段(fightboard+equip_column wall): {par2:.4f}s"
+                        f" ({(par2 / max(img_total, 1e-9) * 100.0):.1f}%)"
+                    )
+                    print(
+                        f"      · fightboard_total: {fight_total:.4f}s"
+                        f" ({(fight_total / max(img_total, 1e-9) * 100.0):.1f}%)"
+                    )
+                    print(
+                        f"      · equip_column_total: {eq_total:.4f}s"
+                        f" ({(eq_total / max(img_total, 1e-9) * 100.0):.1f}%)"
+                    )
+                    print(
+                        f"    - player_onnx 全 ROI(串行，GPU 独占): {pl_total:.4f}s"
+                        f" ({(pl_total / max(img_total, 1e-9) * 100.0):.1f}%)"
+                    )
+                print(
+                    f"    - 场景回读(load_raw_scene): {phase_sec.get('load_raw_scene', 0.0):.4f}s"
+                    f" ({(phase_sec.get('load_raw_scene', 0.0) / max(img_total, 1e-9) * 100.0):.1f}%)"
+                )
+                print(
+                    f"    - 其它未细分(调度/组装等): {residual:.4f}s"
+                    f" ({(residual / max(img_total, 1e-9) * 100.0):.1f}%)"
+                )
 
     legend_trait_names = tcv._load_legend_trait_names(PROJECT_DIR / "data" / "rag_legend_traits.jsonl")
     group_traits_map: Dict[str, Dict[str, Any]] = {}
