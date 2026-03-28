@@ -5,11 +5,20 @@ preboard_mobilenet：备战席识别（MobileNet + DML/CPU；血条为 fightboar
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+for _d in Path(__file__).resolve().parents:
+    if (_d / "repo_sys_path.py").exists():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
+        break
+import repo_sys_path  # noqa: F401
+
 import argparse
 import concurrent.futures
 import json
 import tempfile
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
@@ -21,11 +30,13 @@ from element_recog import equip_recog as er
 import fightboard_mobilenet as f3
 from preboard_dinov2 import _assign_piece_bars_to_cells, _draw_preboard_overlay
 
-PROJECT_DIR = Path(__file__).resolve().parent
+from project_paths import DEFAULT_OUT_PREBOARD_V3, PROJECT_ROOT
+
+PROJECT_DIR = PROJECT_ROOT
 DEFAULT_INPUT = PROJECT_DIR / "对局截图"
 DEFAULT_PIECE_DIR = PROJECT_DIR / "chess_gallery"
 DEFAULT_EQUIP_GALLERY = PROJECT_DIR / "equip_gallery"
-DEFAULT_OUT = PROJECT_DIR / "preboard_info_v3"
+DEFAULT_OUT = DEFAULT_OUT_PREBOARD_V3
 
 
 def _detect_one_bar_equip_top1(

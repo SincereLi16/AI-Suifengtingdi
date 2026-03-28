@@ -11,9 +11,18 @@ fightboard_recog：把 chess_recog + equip_recog 串起来。
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+for _d in Path(__file__).resolve().parents:
+    if (_d / "repo_sys_path.py").exists():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
+        break
+import repo_sys_path  # noqa: F401
+
 import argparse
 import json
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
@@ -24,11 +33,13 @@ from element_recog import equip_recog as er
 from element_recog import bars_recog as br
 
 
-PROJECT_DIR = Path(__file__).resolve().parent
+from project_paths import DEFAULT_OUT_FIGHTBOARD, PROJECT_ROOT
+
+PROJECT_DIR = PROJECT_ROOT
 DEFAULT_INPUT = PROJECT_DIR / "对局截图"
 DEFAULT_PIECE_DIR = PROJECT_DIR / "chess_gallery"
 DEFAULT_EQUIP_GALLERY = PROJECT_DIR / "equip_gallery"
-DEFAULT_OUT = PROJECT_DIR / "fightboard_info"
+DEFAULT_OUT = DEFAULT_OUT_FIGHTBOARD
 
 
 def _draw_two_line_label(

@@ -3,7 +3,7 @@
 远程仓库：<https://github.com/SincereLi16/AI-Suifengtingdi.git>  
 默认分支：`main`
 
-虚拟环境目录（如 `.venv_battle_ocr/`）已在 `.gitignore` 中，**勿**将整个 venv 拷进仓库；换电脑后在本机重新创建虚拟环境并安装依赖（见 `依赖与环境说明.txt`）。
+虚拟环境目录（如 `.venv_battle_ocr/`）已在 `.gitignore` 中，**勿**将整个 venv 拷进仓库；换电脑后在本机重新创建虚拟环境并安装依赖（见 `docs/依赖与环境说明.txt`）。
 
 ---
 

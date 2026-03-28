@@ -1,27 +1,40 @@
 # -*- coding: utf-8 -*-
 """
-fightboard_dinov2：棋子识别（模板 或 MobileNetV3-Small 特征检索）+ 装备模板匹配。
+fightboard_mobilenet：棋子识别（torchvision MobileNetV3-Small 特征检索）+ 装备模板匹配。
 
-- ``--chess-backend template``：灰度 TM_CCOEFF_NORMED（快但易错）。
-- ``--chess-backend mobilenet_v3_small``：torchvision MobileNetV3-Small（ImageNet 预训练）提取向量，
-  与图库做余弦 top-k，流程对齐 ``chess_recog`` 的 DINOv2 检索式，但更轻、更快。
+棋子：MobileNetV3-Small（ImageNet 预训练）提取向量，与 ``chess_gallery`` 做余弦 top-k，
+多采样点投票 + softmax 聚合（与 ``chess_recog`` 检索式流程对齐）。
 
 多区域 Stage1/Stage2 投票 + softmax 聚合默认**保留**：当前为**检索式**而非在英雄类上训练的分类头，
 偏移与光照仍会扰动单点特征，投票可压噪。若以后改为「全监督分类 + 数据对齐」，可再评估减采样点。
 
-输出：每张图 ``{stem}_fightboard_综合标注.png``；可选 ``--json``。默认 ``fightboard_info_v2``。
+输出：每张图 ``{stem}_fightboard_综合标注.png``；默认同时写出 ``{stem}_fightboard_summary.json``（``--no-json`` 可关闭）。
+默认仅处理**主图**（stem 以 ``-a`` / ``_a`` 结尾，或纯数字）；``--all-images`` 处理目录内全部图。
+默认**运行前清空** ``--out`` 目录（与旧版一致）；若需保留已有文件，加 ``--no-clear-out``。
+默认输出目录 ``runs/fightboard_info_v2``。
 
-血条：``load_healthbar_templates`` → ``_detect_healthbars_in_roi`` → 可选宽度钉档（``--bar-snap-width``；``--bar-width-snap`` / ``--no-bar-width-snap``）→ 可选将钉档框收进检测框内「非纯白」列范围（``--no-bar-clip-to-content`` 可关）；不在此重复绘制与检测不一致的分块网格（已删），以减开销、避免误导。
+血条（直接运行本脚本时由 ``_v3_main`` 注入）：``load_healthbar_templates`` → ROI 内 **细切块** + OpenCV ``TM_CCOEFF_NORMED`` 原始阈值匹配 → 框合并；无检出时整幅 ROI 同法回退 → 可选钉档 / 列投影收束；与 ``chess_recog`` 细切块语义对齐，**不再使用**整幅 ORT 卷积匹配。
 """
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+for _d in Path(__file__).resolve().parents:
+    if (_d / "repo_sys_path.py").exists():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
+        break
+import repo_sys_path  # noqa: F401
+
 import argparse
 import concurrent.futures
 import json
+import re
+import shutil
 import tempfile
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
@@ -29,6 +42,7 @@ import numpy as np
 
 from element_recog import chess_recog as cr
 from element_recog import equip_recog as er
+from element_recog import equip_column_recog as ecr_col
 from element_recog import bars_recog as br
 from element_recog.chess_recog import (
     BELOW_BAR_PX,
@@ -56,11 +70,26 @@ from element_recog.chess_recog import (
 from element_recog.chess_recog import ROI as CR_ROI
 from element_recog.chess_recog import _prepare_piece_db_matrix, _topk_cosine
 
-PROJECT_DIR = Path(__file__).resolve().parent
+from project_paths import DEFAULT_OUT_FIGHTBOARD_V2, PROJECT_ROOT
+
+PROJECT_DIR = PROJECT_ROOT
 DEFAULT_INPUT = PROJECT_DIR / "对局截图"
 DEFAULT_PIECE_DIR = PROJECT_DIR / "chess_gallery"
 DEFAULT_EQUIP_GALLERY = PROJECT_DIR / "equip_gallery"
-DEFAULT_OUT = PROJECT_DIR / "fightboard_info_v2"
+DEFAULT_OUT = DEFAULT_OUT_FIGHTBOARD_V2
+
+
+def _stem_matches_primary_suffix(stem: str, suffix: str) -> bool:
+    """与 trait_cross_validate 主图规则一致：-a / _a / 纯数字 stem。"""
+    if not suffix:
+        return True
+    s = stem.lower()
+    su = suffix.lower()
+    if s.endswith(f"-{su}") or s.endswith(f"_{su}"):
+        return True
+    if re.fullmatch(r"\d+", s or ""):
+        return True
+    return False
 
 # 钉档默认宽度（像素）：相对「检测框」水平居中，使定宽框相对检测框左右对称伸缩。
 FIGHTBOARD_BAR_SNAP_WIDTH_DEFAULT: int = 106
@@ -223,53 +252,6 @@ def _iter_piece_image_paths(piece_dir: Path) -> List[Path]:
     return files
 
 
-def _build_gray_template_gallery(piece_dir: Path) -> List[Tuple[str, np.ndarray]]:
-    out: List[Tuple[str, np.ndarray]] = []
-    for p in _iter_piece_image_paths(piece_dir):
-        try:
-            bgr = cr._load_image(p, allow_alpha=True)
-        except Exception:
-            continue
-        if bgr.ndim == 2:
-            g = bgr
-        else:
-            g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        if g.shape[0] < 2 or g.shape[1] < 2:
-            continue
-        out.append((p.stem, g))
-    return out
-
-
-def _topk_template_match(
-    crop_bgr: np.ndarray,
-    gallery: List[Tuple[str, np.ndarray]],
-    *,
-    size: int = 64,
-    topk: int = 5,
-) -> List[Tuple[str, float]]:
-    if crop_bgr.size == 0 or not gallery:
-        return []
-    h, w = crop_bgr.shape[:2]
-    if h < 2 or w < 2:
-        return []
-    crop_r = cv2.resize(crop_bgr, (size, size))
-    if crop_r.ndim == 2:
-        cg = crop_r
-    else:
-        cg = cv2.cvtColor(crop_r, cv2.COLOR_BGR2GRAY)
-    scores: List[Tuple[str, float]] = []
-    for stem, tmpl_gray in gallery:
-        if tmpl_gray.shape[0] < 2 or tmpl_gray.shape[1] < 2:
-            continue
-        t = cv2.resize(tmpl_gray, (size, size))
-        res = cv2.matchTemplate(cg, t, cv2.TM_CCOEFF_NORMED)
-        score = float(np.reshape(res, (-1,))[0])
-        scores.append((stem, score))
-    scores.sort(key=lambda x: -x[1])
-    k = max(1, min(int(topk), len(scores)))
-    return scores[:k]
-
-
 def _get_mobilenet_encoder(device: "Any") -> "Any":
     import torch
     from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
@@ -364,6 +346,43 @@ def _print_timing_block(title: str, timings: Dict[str, float]) -> None:
         print(f"  {key}: {disp}")
 
 
+def _dirty_roi_for_bar_sketch(
+    scene_h: int,
+    scene_w: int,
+    *,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    r: int,
+    crop_base_bias_x: int,
+    crop_base_bias_y: int,
+) -> Tuple[int, int, int, int]:
+    """
+    单条血条在 Stage1/2 中可能绘制的框、采样圆、上侧标签的保守外包矩形。
+    用于失败时只回滚小块，避免每 bar 对整幅 mark 做 copy。
+    """
+    xs: List[int] = [int(x), int(x + w)]
+    ys: List[int] = [int(y), int(y + h), max(0, int(y) - 52)]
+    base_cx0 = int(x + w // 2 + CENTER_OFFSET_X + crop_base_bias_x)
+    base_cy0 = int(y + h + crop_base_bias_y)
+    for dx, dy in list(DEFAULT_SAMPLES) + list(EXTRA_SAMPLES):
+        cx = base_cx0 + int(dx)
+        cy = base_cy0 + int(dy)
+        xs.extend([cx - r, cx + r])
+        ys.extend([cy - r, cy + r])
+    pad = 6
+    rx1 = max(0, min(xs) - pad)
+    rx2 = min(int(scene_w), max(xs) + pad)
+    ry1 = max(0, min(ys) - pad)
+    ry2 = min(int(scene_h), max(ys) + pad)
+    if rx2 <= rx1:
+        rx2 = min(int(scene_w), rx1 + 1)
+    if ry2 <= ry1:
+        ry2 = min(int(scene_h), ry1 + 1)
+    return rx1, ry1, rx2, ry2
+
+
 def _select_torch_device(
     torch_device: str = "auto",
     prefer_rocm: bool = False,
@@ -429,7 +448,6 @@ def _select_torch_device(
 
 def run_recognition_chess(
     *,
-    backend: str = "mobilenet_v3_small",
     image_path: Path,
     template_path: Path,
     piece_dir: Path,
@@ -455,7 +473,6 @@ def run_recognition_chess(
     stage2_single_vote_min_gap_score: float = 0.30,
     alpha_tight: bool = True,
     alpha_thresh: int = 18,
-    template_match_size: int = 64,
     topk_raw: int = 5,
     save_debug_crops: bool = False,
     batch_embed: bool = True,
@@ -467,12 +484,12 @@ def run_recognition_chess(
     torch_auto_priority: str = "dml,cuda,cpu",
     torch_fallback_to_cpu: bool = True,
     print_timings: bool = True,
+    save_annotated_png: bool = True,
+    fast_bar_mark_rollback: bool = True,
     bar_width_snap: bool = True,
     bar_snap_width: int = FIGHTBOARD_BAR_SNAP_WIDTH_DEFAULT,
     bar_clip_to_content: bool = True,
 ) -> Dict[str, Any]:
-    if backend not in ("template", "mobilenet_v3_small"):
-        raise ValueError(f"未知 chess backend: {backend!r}")
     if bar_detect_strategy not in ("simple_tiled", "simple_tiled_edges"):
         raise ValueError(f"未知 bar_detect_strategy: {bar_detect_strategy!r}")
 
@@ -538,46 +555,36 @@ def run_recognition_chess(
         prof["clip_bar_to_column_extent"] = 0.0
     t_seg = time.perf_counter()
 
-    gallery: Optional[List[Tuple[str, np.ndarray]]] = None
     db_names: Optional[List[str]] = None
     db_mat: Optional[np.ndarray] = None
     mobilenet_model: Any = None
     mobilenet_device: Any = None
     mobilenet_transform: Any = None
 
-    if backend == "template":
-        gallery = _build_gray_template_gallery(piece_dir)
-        if not gallery:
-            raise RuntimeError(f"模板库为空: {piece_dir}")
-        prof["prepare_chess_gallery"] = time.perf_counter() - t_seg
-        t_seg = time.perf_counter()
+    if mobilenet_bundle is not None:
+        mobilenet_model, mobilenet_device, mobilenet_transform, db_names, db_mat = mobilenet_bundle
+        # 本图不重复建库；耗时见 main() 中「MobileNet 一次性准备」
     else:
-        import torch
-
-        if mobilenet_bundle is not None:
-            mobilenet_model, mobilenet_device, mobilenet_transform, db_names, db_mat = mobilenet_bundle
-            # 本图不重复建库；耗时见 main() 中「MobileNet 一次性准备」
-        else:
-            t0 = time.perf_counter()
-            mobilenet_device, _acc_backend = _select_torch_device(
-                torch_device=torch_device,
-                prefer_rocm=prefer_rocm,
-                auto_priority=torch_auto_priority,
-                fallback_to_cpu=torch_fallback_to_cpu,
-            )
-            mobilenet_model = _get_mobilenet_encoder(mobilenet_device)
-            mobilenet_transform = _mobilenet_transform()
-            prof["mobilenet_load_model"] = time.perf_counter() - t0
-            t0 = time.perf_counter()
-            piece_db = _build_mobilenet_piece_db(piece_dir, mobilenet_model, mobilenet_device, mobilenet_transform)
-            if not piece_db:
-                raise RuntimeError("MobileNet 特征库为空（检查 chess_gallery / report.json）")
-            prof["mobilenet_build_piece_db"] = time.perf_counter() - t0
-            t0 = time.perf_counter()
-            db_names, db_mat = _prepare_piece_db_matrix(piece_db)
-            prof["prepare_piece_matrix"] = time.perf_counter() - t0
-        prof["prepare_chess_gallery"] = time.perf_counter() - t_seg
-        t_seg = time.perf_counter()
+        t0 = time.perf_counter()
+        mobilenet_device, _acc_backend = _select_torch_device(
+            torch_device=torch_device,
+            prefer_rocm=prefer_rocm,
+            auto_priority=torch_auto_priority,
+            fallback_to_cpu=torch_fallback_to_cpu,
+        )
+        mobilenet_model = _get_mobilenet_encoder(mobilenet_device)
+        mobilenet_transform = _mobilenet_transform()
+        prof["mobilenet_load_model"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        piece_db = _build_mobilenet_piece_db(piece_dir, mobilenet_model, mobilenet_device, mobilenet_transform)
+        if not piece_db:
+            raise RuntimeError("MobileNet 特征库为空（检查 chess_gallery / report.json）")
+        prof["mobilenet_build_piece_db"] = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        db_names, db_mat = _prepare_piece_db_matrix(piece_db)
+        prof["prepare_piece_matrix"] = time.perf_counter() - t0
+    prof["prepare_chess_gallery"] = time.perf_counter() - t_seg
+    t_seg = time.perf_counter()
 
     mark = scene.copy()
     x1, y1, x2, y2 = CR_ROI
@@ -589,14 +596,10 @@ def run_recognition_chess(
     results: List[Dict[str, Any]] = []
     filtered_wild_top_zone: List[Dict[str, Any]] = []
 
-    sz = int(max(16, template_match_size))
     t_chess_crop_acc = 0.0
     t_chess_rec_acc = 0.0
 
     def _one_top(bgr: np.ndarray) -> List[Tuple[str, float]]:
-        if backend == "template":
-            assert gallery is not None
-            return _topk_template_match(bgr, gallery, size=sz, topk=int(topk_raw))
         assert db_names is not None and db_mat is not None
         assert mobilenet_model is not None and mobilenet_device is not None and mobilenet_transform is not None
         q = _embed_mobilenet_bgr(bgr, mobilenet_model, mobilenet_device, mobilenet_transform)
@@ -605,15 +608,39 @@ def run_recognition_chess(
     def _tops_for_batch(bgrs: Sequence[np.ndarray]) -> List[List[Tuple[str, float]]]:
         if not bgrs:
             return []
-        if backend == "template" or not bool(batch_embed):
+        if not bool(batch_embed):
             return [_one_top(b) for b in bgrs]
         assert db_names is not None and db_mat is not None
         assert mobilenet_model is not None and mobilenet_device is not None and mobilenet_transform is not None
         q_list = _embed_mobilenet_bgr_batch(bgrs, mobilenet_model, mobilenet_device, mobilenet_transform)
         return [_topk_cosine(q, db_names, db_mat, topk=int(topk_raw)) for q in q_list]
 
+    Hm, Wm = int(mark.shape[0]), int(mark.shape[1])
     for bi, (x, y, w, h) in enumerate(boxes):
-        mark_before = mark.copy()
+        if bool(fast_bar_mark_rollback):
+            drx1, dry1, drx2, dry2 = _dirty_roi_for_bar_sketch(
+                Hm,
+                Wm,
+                x=int(x),
+                y=int(y),
+                w=int(w),
+                h=int(h),
+                r=int(r),
+                crop_base_bias_x=int(crop_base_bias_x),
+                crop_base_bias_y=int(crop_base_bias_y),
+            )
+            patch_backup = mark[dry1:dry2, drx1:drx2].copy()
+
+            def _revert_bar_sketch() -> None:
+                mark[dry1:dry2, drx1:drx2] = patch_backup
+
+        else:
+            mark_before = mark.copy()
+
+            def _revert_bar_sketch() -> None:
+                nonlocal mark
+                mark = mark_before
+
         cv2.rectangle(mark, (x, y), (x + w, y + h), (0, 255, 0), 2)
         base_cx = x + w // 2 + CENTER_OFFSET_X + crop_base_bias_x
         base_cy = y + h + crop_base_bias_y
@@ -842,7 +869,7 @@ def run_recognition_chess(
                 per_samples = per_samples2
 
         if int(used_samples) <= 0:
-            mark = mark_before
+            _revert_bar_sketch()
             continue
 
         if int(y) <= int(TOP_ZONE_MAX_Y_ABS) and (best not in TOP_ZONE_ALLOWED_LABELS):
@@ -855,7 +882,7 @@ def run_recognition_chess(
                     "reason": "top_zone_non_whitelist",
                 }
             )
-            mark = mark_before
+            _revert_bar_sketch()
             continue
 
         if stage == "stage2" and stage2_detail:
@@ -865,7 +892,7 @@ def run_recognition_chess(
                 if fr.get("method") == "stage2_retry_min_sim":
                     wms = float(fr.get("winner_max_sim", -1.0))
                     if wms < 0.67:
-                        mark = mark_before
+                        _revert_bar_sketch()
                         continue
 
         results.append(
@@ -947,9 +974,10 @@ def run_recognition_chess(
     prof["position_mapping"] = time.perf_counter() - t_seg
     t_seg = time.perf_counter()
 
-    mark_suffix = "MobileNetV3_标记.png" if backend == "mobilenet_v3_small" else "多点Template_标记.png"
-    mark_path = output_dir / f"{img_path.stem}_{mark_suffix}"
-    _save_image(mark, mark_path)
+    if bool(save_annotated_png):
+        mark_suffix = "MobileNetV3_标记.png"
+        mark_path = output_dir / f"{img_path.stem}_{mark_suffix}"
+        _save_image(mark, mark_path)
 
     prof["save_outputs"] = time.perf_counter() - t_seg
     prof["total_recognition"] = time.perf_counter() - t_prof0
@@ -960,7 +988,7 @@ def run_recognition_chess(
     out_json: Dict[str, Any] = {
         "image": str(img_path),
         "piece_dir": str(piece_dir),
-        "backend": backend,
+        "backend": "mobilenet_v3_small",
         "bar_detect_strategy": str(bar_detect_strategy),
         "bar_detect_simple_threshold": float(bar_detect_simple_threshold),
         "bar_width_snap": bool(bar_width_snap),
@@ -968,7 +996,6 @@ def run_recognition_chess(
         "bar_clip_to_content": bool(bar_clip_to_content),
         "batch_embed": bool(batch_embed),
         "timings_s": prof,
-        "template_match_size": sz,
         "roi": list(CR_ROI),
         "circle_diameter": circle_diameter,
         "below_bar_px": BELOW_BAR_PX,
@@ -1003,12 +1030,6 @@ def run_recognition_chess(
     }
     (output_dir / "result.json").write_text(json.dumps(out_json, ensure_ascii=False, indent=2), encoding="utf-8")
     return out_json
-
-
-def run_recognition_template(**kwargs: Any) -> Dict[str, Any]:
-    """兼容旧名：等价于 ``run_recognition_chess(..., backend=\"template\")``。"""
-    kwargs.pop("backend", None)
-    return run_recognition_chess(backend="template", **kwargs)
 
 
 def _detect_one_bar_equip(
@@ -1189,6 +1210,9 @@ def _get_worker_equip_templates(equip_gallery_dir: Path) -> List[Tuple[str, Any]
         return hit
     templates = er._build_templates(equip_gallery_dir)
     if not templates:
+        # 图鉴仅存在于分层子目录 V0~V3 时，根目录直扫为空
+        templates, _tier = ecr_col.build_tiered_templates(equip_gallery_dir)
+    if not templates:
         raise RuntimeError(f"equip-gallery 无可用图片: {equip_gallery_dir}")
     _WORKER_CACHE[key] = templates
     return templates
@@ -1204,28 +1228,24 @@ def _process_one_image_job(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     scene_bgr = cr._load_image(image_path)
 
-    mobilenet_bundle = None
-    if str(payload["chess_backend"]) == "mobilenet_v3_small":
-        mobilenet_bundle = _get_worker_mobilenet_bundle(
-            piece_dir=piece_dir,
-            torch_device=str(payload.get("torch_device") or "auto"),
-            prefer_rocm=bool(payload.get("prefer_rocm")),
-            torch_auto_priority=str(payload.get("torch_auto_priority") or "dml,cuda,cpu"),
-            torch_fallback_to_cpu=bool(payload.get("torch_fallback_to_cpu", True)),
-        )
+    mobilenet_bundle = _get_worker_mobilenet_bundle(
+        piece_dir=piece_dir,
+        torch_device=str(payload.get("torch_device") or "auto"),
+        prefer_rocm=bool(payload.get("prefer_rocm")),
+        torch_auto_priority=str(payload.get("torch_auto_priority") or "dml,cuda,cpu"),
+        torch_fallback_to_cpu=bool(payload.get("torch_fallback_to_cpu", True)),
+    )
 
-    with tempfile.TemporaryDirectory(prefix="fightboard_dinov2_chess_") as td:
+    with tempfile.TemporaryDirectory(prefix="fightboard_mobilenet_chess_") as td:
         chess_out_dir = Path(td) / "chess"
         chess_out_dir.mkdir(parents=True, exist_ok=True)
         out_json = run_recognition_chess(
-            backend=str(payload["chess_backend"]),
             image_path=image_path,
             template_path=bar_tpl,
             piece_dir=piece_dir,
             output_dir=chess_out_dir,
             circle_diameter=int(payload["circle_diameter"]),
             alpha_tight=bool(payload["alpha_tight"]),
-            template_match_size=int(payload["template_match_size"]),
             save_debug_crops=bool(payload["save_debug_crops"]),
             batch_embed=bool(payload["batch_embed"]),
             bar_detect_strategy=str(payload["bar_detect_strategy"]),
@@ -1319,8 +1339,8 @@ def _process_one_image_job(payload: Dict[str, Any]) -> Dict[str, Any]:
         chess_timings = out_json.get("timings_s") or {}
         summary = {
             "file": image_path.name,
-            "pipeline": "fightboard_dinov2",
-            "chess_backend": str(payload["chess_backend"]),
+            "pipeline": "fightboard_mobilenet",
+            "chess_backend": "mobilenet_v3_small",
             "bar_detect_strategy": str(payload["bar_detect_strategy"]),
             "bar_detect_simple_threshold": float(payload["bar_detect_simple_threshold"]),
             "bar_width_snap": bool(out_json.get("bar_width_snap")),
@@ -1345,18 +1365,12 @@ def _process_one_image_job(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="fightboard_dinov2：棋子（模板 或 MobileNetV3-Small 特征检索）+ 装备模板匹配"
+        description="fightboard_mobilenet：棋子 MobileNetV3-Small 特征检索 + 装备模板匹配"
     )
     ap.add_argument("--img-dir", type=Path, default=DEFAULT_INPUT, help="对局截图文件夹/单张图")
     ap.add_argument("--piece-dir", type=Path, default=DEFAULT_PIECE_DIR, help="chess_gallery")
     ap.add_argument("--equip-gallery", type=Path, default=DEFAULT_EQUIP_GALLERY, help="装备图鉴目录")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help="输出根目录（会清空）")
-    ap.add_argument(
-        "--chess-backend",
-        choices=["mobilenet_v3_small", "template"],
-        default="mobilenet_v3_small",
-        help="棋子识别：MobileNetV3-Small 特征检索（默认）或灰度模板",
-    )
     ap.add_argument(
         "--bar-detect-strategy",
         choices=["simple_tiled", "simple_tiled_edges"],
@@ -1409,7 +1423,6 @@ def main() -> None:
         help="圆形采样锚点额外竖直偏移（像素），叠加在 条底边 之上（正值≈整体向下采）",
     )
     ap.add_argument("--alpha-tight", action="store_true", default=True, help="alpha 紧裁（默认开）")
-    ap.add_argument("--template-match-size", type=int, default=64, help="模板与 crop 对齐边长（像素）")
     ap.add_argument(
         "--chess-sample-min-sim",
         type=float,
@@ -1489,7 +1502,27 @@ def main() -> None:
     ap.add_argument("--equip-label-topn", type=int, default=3)
     ap.add_argument("--equip-workers", type=int, default=1, help="每张图内装备识别并行线程数（默认1）")
     ap.add_argument("--label-font-size", type=int, default=16)
-    ap.add_argument("--json", action="store_true", help="每张图额外输出 fightboard summary json")
+    ap.add_argument(
+        "--no-json",
+        action="store_true",
+        help="不写出 *_fightboard_summary.json（默认每张主图都会写，供 trait_cross_validate 使用）",
+    )
+    ap.add_argument(
+        "--no-clear-out",
+        action="store_true",
+        help="运行前不清空输出目录（默认会清空 --out，再写入本次结果）",
+    )
+    ap.add_argument(
+        "--all-images",
+        action="store_true",
+        help="处理目录内全部截图；默认仅处理主图（stem 为 *-a / *_a 或纯数字）",
+    )
+    ap.add_argument(
+        "--primary-suffix",
+        type=str,
+        default="a",
+        help="主图 stem 后缀（默认 a，与 TCV 主图一致）",
+    )
     args = ap.parse_args()
 
     img_dir = args.img_dir.resolve()
@@ -1503,9 +1536,7 @@ def main() -> None:
         raise SystemExit(f"equip-gallery 不存在: {equip_gallery_dir}")
 
     out_root = args.out.resolve()
-    if out_root.exists():
-        import shutil
-
+    if not bool(args.no_clear_out) and out_root.exists():
         shutil.rmtree(out_root, ignore_errors=True)
     out_root.mkdir(parents=True, exist_ok=True)
 
@@ -1521,25 +1552,37 @@ def main() -> None:
 
     workers = max(1, int(args.workers))
     accel_backend = "cpu"
-    if str(args.chess_backend) == "mobilenet_v3_small":
-        try:
-            _dev_probe, accel_backend = _select_torch_device(
-                torch_device=str(args.torch_device),
-                prefer_rocm=bool(args.prefer_rocm),
-                auto_priority=str(args.torch_auto_priority),
-                fallback_to_cpu=bool(args.torch_fallback_to_cpu),
-            )
-            print(f"[ACCEL] MobileNet device={_dev_probe} backend={accel_backend}")
-        except Exception as e:
-            raise SystemExit(str(e))
-    if workers > 1 and str(args.chess_backend) == "mobilenet_v3_small" and accel_backend in ("cuda", "rocm"):
+    try:
+        _dev_probe, accel_backend = _select_torch_device(
+            torch_device=str(args.torch_device),
+            prefer_rocm=bool(args.prefer_rocm),
+            auto_priority=str(args.torch_auto_priority),
+            fallback_to_cpu=bool(args.torch_fallback_to_cpu),
+        )
+        print(f"[ACCEL] MobileNet device={_dev_probe} backend={accel_backend}")
+    except Exception as e:
+        raise SystemExit(str(e))
+    if workers > 1 and accel_backend in ("cuda", "rocm"):
         if not bool(args.allow_gpu_multiprocess):
             print("[WARN] CUDA/ROCm 下默认禁用多进程（防显存爆涨）；已自动回退 workers=1。")
             workers = 1
         else:
             print("[WARN] 已开启 GPU 多进程，请注意显存会按 worker 近似线性增长。")
 
-    images = br.iter_input_images(img_dir)
+    images: List[Path] = br.iter_input_images(img_dir)
+    primary_suffix = str(args.primary_suffix or "a").strip()
+    if not bool(args.all_images):
+        before = len(images)
+        images = [p for p in images if _stem_matches_primary_suffix(p.stem, primary_suffix)]
+        if before and not images:
+            raise SystemExit(
+                f"未找到主图（stem 须以 -{primary_suffix}/_{primary_suffix} 结尾或纯数字；共 {before} 张图）。"
+                f"使用 --all-images 可处理全部。"
+            )
+        if before != len(images):
+            print(f"[INFO] 仅主图：{len(images)}/{before} 张（--all-images 可处理全部）")
+
+    write_json = not bool(args.no_json)
     jobs = []
     for image_path in images:
         jobs.append(
@@ -1549,10 +1592,8 @@ def main() -> None:
                 "piece_dir": str(piece_dir),
                 "equip_gallery": str(equip_gallery_dir),
                 "bar_tpl": str(bar_tpl),
-                "chess_backend": str(args.chess_backend),
                 "circle_diameter": int(args.circle_diameter),
                 "alpha_tight": bool(args.alpha_tight),
-                "template_match_size": int(args.template_match_size),
                 "save_debug_crops": bool(args.save_debug_crops),
                 "batch_embed": bool(args.batch_embed),
                 "bar_detect_strategy": str(args.bar_detect_strategy),
@@ -1591,7 +1632,7 @@ def main() -> None:
                 "equip_workers": int(args.equip_workers),
                 "label_font_size": int(args.label_font_size),
                 "min_roi": int(min_roi),
-                "json": bool(args.json),
+                "json": write_json,
                 "print_timings": bool(workers == 1),
                 "torch_device": str(args.torch_device),
                 "prefer_rocm": bool(args.prefer_rocm),
@@ -1613,5 +1654,167 @@ def main() -> None:
                 print(f"[OK] {r['image_name']} -> {r['output_name']}")
 
 
-if __name__ == "__main__":
+
+# =========================
+# V3 血条：细切块 + OpenCV TM_CCOEFF_NORMED（与 chess_recog 细切块一致，无 ORT）
+# =========================
+
+
+def _v3_collect_peaks(score_map: np.ndarray, thr: float, max_peaks: int = 24) -> List[Tuple[int, int, float]]:
+    if score_map.size == 0:
+        return []
+    sm = np.asarray(score_map, dtype=np.float32)
+    k = np.ones((3, 3), np.uint8)
+    mx = cv2.dilate(sm, k)
+    mask = (sm >= float(thr)) & (sm >= mx)
+    ys, xs = np.where(mask)
+    if ys.size == 0:
+        return []
+    vals = sm[ys, xs]
+    idx = np.argsort(-vals)
+    out = []
+    for i in idx[: max(1, int(max_peaks))]:
+        out.append((int(xs[i]), int(ys[i]), float(vals[i])))
+    return out
+
+
+def _v3_match_gray_tile_opencv_raw(
+    gray: np.ndarray,
+    templates: Sequence[np.ndarray],
+    *,
+    simple_threshold: float,
+    max_peaks: int = 12,
+) -> List[Tuple[int, int, int, int]]:
+    """
+    单个 tile 灰度子图：OpenCV ``TM_CCOEFF_NORMED`` **原始**分数 + 阈值（不做 min-max），
+    与 ``chess_recog`` 细切块语义一致，避免小块内归一化放大噪声。
+    """
+    if gray.size == 0:
+        return []
+    cands: List[Tuple[int, int, int, int]] = []
+    scores: List[float] = []
+    thr = float(simple_threshold)
+    for t in templates:
+        if t is None or np.size(t) == 0:
+            continue
+        tg = cv2.cvtColor(t, cv2.COLOR_BGR2GRAY) if t.ndim == 3 else np.asarray(t, dtype=np.uint8)
+        th, tw = tg.shape[:2]
+        if th < 3 or tw < 3 or gray.shape[0] < th or gray.shape[1] < tw:
+            continue
+        res = cv2.matchTemplate(gray, tg, cv2.TM_CCOEFF_NORMED)
+        sm = np.asarray(res, dtype=np.float32)
+        peaks = _v3_collect_peaks(sm, thr=thr, max_peaks=int(max_peaks))
+        for px, py, sc in peaks:
+            cands.append((int(px), int(py), int(tw), int(th)))
+            scores.append(float(sc))
+    if not cands:
+        return []
+    return cr._nms_boxes(cands, scores, iou_threshold=0.35, center_dist_px=28.0)
+
+
+def _v3_detect_healthbars_in_roi(
+    scene: np.ndarray,
+    templates: Sequence[np.ndarray],
+    roi: Tuple[int, int, int, int],
+    *,
+    simple_threshold: float = 0.58,
+) -> List[Tuple[int, int, int, int]]:
+    """
+    V3 血条检测：ROI 内细切块 + 各块内 OpenCV ``TM_CCOEFF_NORMED`` 原始阈值匹配；
+    合并重叠框；若分块无检出则对整幅 ROI 灰度做同法回退（与 ``chess_recog._detect_healthbars_in_roi_simple`` 一致）。
+    """
+    x1, y1, x2, y2 = map(int, roi)
+    H, W = scene.shape[:2]
+    x1 = max(0, min(x1, W - 1))
+    y1 = max(0, min(y1, H - 1))
+    x2 = max(x1 + 1, min(x2, W))
+    y2 = max(y1 + 1, min(y2, H))
+    crop = scene[y1:y2, x1:x2]
+    if crop.size == 0:
+        return []
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop.astype(np.uint8)
+
+    tmpl_list = [t for t in templates if t is not None and np.size(t) > 0]
+    ref_w, ref_h = cr._estimate_ref_bar_size(tmpl_list)
+    ch, cw = int(gray.shape[0]), int(gray.shape[1])
+    tiles = cr._build_roi_tiles_fine(cw, ch, ref_w, ref_h)
+
+    crop_boxes: List[Tuple[int, int, int, int]] = []
+    for tx, ty, tile_w, tile_h in tiles:
+        sub = gray[ty : ty + tile_h, tx : tx + tile_w]
+        if sub.size == 0:
+            continue
+        local = _v3_match_gray_tile_opencv_raw(
+            sub,
+            templates,
+            simple_threshold=float(simple_threshold),
+            max_peaks=12,
+        )
+        for bx, by, bw, bh in local:
+            crop_boxes.append((int(bx + tx), int(by + ty), int(bw), int(bh)))
+
+    merged = cr._merge_overlapping_boxes_union(crop_boxes)
+    if not merged:
+        merged = list(
+            _v3_match_gray_tile_opencv_raw(
+                gray,
+                templates,
+                simple_threshold=float(simple_threshold),
+                max_peaks=28,
+            )
+        )
+
+    out = [(x1 + int(x), y1 + int(y), int(w), int(h)) for (x, y, w, h) in merged]
+    out.sort(key=lambda b: (b[1], b[0]))
+    return out
+
+
+def _v3_is_main_stem(stem: str) -> bool:
+    s = str(stem or "").strip().lower()
+    if not s:
+        return False
+    if "-" in s:
+        return s.rsplit("-", 1)[-1] == "a"
+    return s.endswith("a")
+
+
+def _v3_main() -> None:
+    print("[V3] 血条检测：细切块 + OpenCV TM_CCOEFF_NORMED（原始阈值）；无检出时整幅 ROI 回退")
+
+    legacy_detect = globals().get("_detect_healthbars_in_roi")
+
+    def _patched_detect(scene, templates, roi, strategy="simple_tiled", simple_threshold=0.58):
+        try:
+            return _v3_detect_healthbars_in_roi(scene, templates, roi, simple_threshold=float(simple_threshold))
+        except Exception:
+            return legacy_detect(scene, templates, roi, strategy=strategy, simple_threshold=simple_threshold)
+
+    globals()["_detect_healthbars_in_roi"] = _patched_detect
+
+    legacy_iter = br.iter_input_images
+
+    def _patched_iter(path: Path, image_exts=None):
+        imgs = legacy_iter(path, image_exts=image_exts)
+        keep = [p for p in imgs if _v3_is_main_stem(p.stem)]
+        print(f"[V3] 输入过滤：仅处理主视角 {len(keep)}/{len(imgs)} 张（文件名 *-a）")
+        return keep
+
+    br.iter_input_images = _patched_iter
+
+    argv = list(sys.argv)
+    has_torch_device = any(a.startswith("--torch-device") for a in argv[1:])
+    has_workers = any(a.startswith("--workers") for a in argv[1:])
+    has_auto_pri = any(a.startswith("--torch-auto-priority") for a in argv[1:])
+    if not has_torch_device:
+        argv.extend(["--torch-device", "auto"])
+    if not has_auto_pri:
+        argv.extend(["--torch-auto-priority", "dml,cpu"])
+    if not has_workers:
+        argv.extend(["--workers", "1"])
+    sys.argv = argv
+
     main()
+
+
+if __name__ == "__main__":
+    _v3_main()

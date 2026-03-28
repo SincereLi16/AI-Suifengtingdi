@@ -11,7 +11,7 @@ player_recog：对局截图固定 ROI 的玩家信息识别，并输出带框与
 识别数据：阶段、羁绊栏、等级、经验、金币、连胜/连败、血量/昵称等展示内容
 均来自本脚本对截图 ROI 的 OCR，不依赖本仓库内 chess_recog / equip_recog 等其它识别程序。
 
-依赖：见《依赖与环境说明》OCR 小节。默认自动使用项目内 `.venv_battle_ocr`（首次运行会创建并
+依赖：见 docs/依赖与环境说明.txt 中 OCR 小节。默认自动使用项目内 `.venv_battle_ocr`（首次运行会创建并
 安装 paddle 等），与全局 protobuf/torch 隔离。若要在当前解释器直接运行（不建 venv），可设环境变量
 `BATTLE_UI_OCR_NO_VENV=1`。
 
@@ -29,7 +29,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parent
+for _d in Path(__file__).resolve().parents:
+    if (_d / "repo_sys_path.py").exists():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
+        break
+import repo_sys_path  # noqa: F401
+
+from project_paths import DEFAULT_OUT_PLAYER_INFO, PROJECT_ROOT
+
+_ROOT = PROJECT_ROOT
 _VENV_DIR = _ROOT / ".venv_battle_ocr"
 _VENV_PY = (
     _VENV_DIR / "Scripts" / "python.exe"
@@ -114,7 +123,7 @@ _FONT_CANDIDATES = [
 ]
 
 DEFAULT_INPUT = _ROOT / "对局截图"
-DEFAULT_OUT = _ROOT / "player_info"
+DEFAULT_OUT = DEFAULT_OUT_PLAYER_INFO
 
 PNG_EXTS = {".png"}
 

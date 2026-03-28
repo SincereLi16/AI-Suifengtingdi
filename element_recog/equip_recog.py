@@ -40,10 +40,14 @@ except ImportError:
         _load_image,
     )
 
-PROJECT_DIR = Path(__file__).resolve().parent
-DEFAULT_INPUT = PROJECT_DIR / "对局截图"
-DEFAULT_GALLERY = PROJECT_DIR / "equip_gallery"
-DEFAULT_OUT = PROJECT_DIR / "equip_recog"
+from project_paths import DEFAULT_OUT_EQUIP_RECOG, PROJECT_ROOT
+
+_PROJECT_ROOT = PROJECT_ROOT
+_ELEMENT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = _ELEMENT_DIR  # 兼容旧名：element_recog 包目录
+DEFAULT_INPUT = _PROJECT_ROOT / "对局截图"
+DEFAULT_GALLERY = _PROJECT_ROOT / "equip_gallery"
+DEFAULT_OUT = DEFAULT_OUT_EQUIP_RECOG
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
@@ -280,7 +284,7 @@ def main() -> None:
     ap.add_argument("--max-label-chars", type=int, default=14)
     args = ap.parse_args()
 
-    root = PROJECT_DIR
+    root = _PROJECT_ROOT
     img_dir = args.img_dir if args.img_dir.is_absolute() else root / args.img_dir
     if not img_dir.is_dir():
         raise SystemExit(f"img-dir 不存在: {img_dir}")

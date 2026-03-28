@@ -1,10 +1,19 @@
+# -*- coding: utf-8 -*-
 import base64
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
+
+for _d in Path(__file__).resolve().parents:
+    if (_d / "repo_sys_path.py").exists():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
+        break
+import repo_sys_path  # noqa: F401
 from typing import Dict, Any, List, Optional, Set
 
 from dotenv import load_dotenv
@@ -90,7 +99,7 @@ def _build_s17_vision_system_prompt(trait_names: List[str]) -> str:
 
     return f"""
 你是一个高精度的《金铲铲之战》局面分析助手。
-当前赛季：【天选福星·新春返场】（S17 / setId=4）。
+当前赛季：S17「英雄联盟传奇」（模式与图鉴以 data/rag_legend_* 为准；setId 常见为 16）。
 
 你的任务是从截图中提取【宏观运营相关的信息】，包括：
 - 玩家血量、等级、经验条
@@ -105,7 +114,7 @@ def _build_s17_vision_system_prompt(trait_names: List[str]) -> str:
 - traits: 只输出你能从 UI 羁绊栏明确看到的羁绊；每个羁绊只输出 name 与 active_units，不要输出 level。
 - traits[].name: 必须完全匹配白名单中的名称。
 - traits[].active_units: 当前为该羁绊贡献人数（例如 4 斗士时为 4）。
-- chosen_trait: 天选之人所属羁绊的名称（从白名单中取），看不清填 null。
+- chosen_trait: 若界面有「赛季特殊/强化」类独占标识且能对应到某羁绊名，可填该羁绊（从白名单取）；否则填 null。
 - player.level: 当前人口等级（整数）。必须按以下优先级推断，严禁在能推断出时直接填 null：
   1）若能看到屏幕左侧人口 UI 数字，以其为准；
   2）若人口 UI 看不清，则用「棋盘上已识别到的棋子数量 chess 的长度」作为等级（金铲铲中上阵数=人口）；
@@ -123,11 +132,9 @@ def _build_s17_vision_system_prompt(trait_names: List[str]) -> str:
 - 若某棋子名称与当前激活羁绊明显不符（例如羁绊是斗士+福星，但该位写成了其他赛季英雄），请修正为符合当前羁绊的 S17 英雄；若仅凭外观无法确定是谁，可根据当前阶段、人口、费用和已有羁绊，推断「最可能符合该羁绊的在场棋子」并填写该英雄名。
 - 若某格实在无法对应到任一 S17 英雄，再将 name 设为 null。
 
-【chosen_trait（天选之人所属羁绊）识别规则】：
-- 天选之人机制：每局可有一名天选英雄，该英雄的某个羁绊贡献 +2 而非 +1。
-- 判断方法：在屏幕左侧羁绊栏中，天选英雄所属的羁绊通常有「特殊发光边框 / 天选图标标记」。
-- 如果能从 UI 明确看出哪个羁绊被天选之人加成（该羁绊旁有特殊标识），则在 chosen_trait 中填写该羁绊名称（必须与白名单严格匹配）。
-- 如果看不出来，填 null。
+【chosen_trait 识别规则】：
+- 仅在能从 UI 明确看出「某羁绊被额外高亮/赛季独占标记」且可对应白名单名称时填写；不要臆测。
+- 看不清或本模式无对应 UI 时填 null。
 
 【输出 JSON 模板】（必须严格输出合法 JSON；不要 Markdown；不要注释；不要多余字段；traits 中不要包含 level）：
 {{
@@ -256,7 +263,7 @@ def _sanitize_s17_state(state: Dict[str, Any], trait_names: List[str]) -> Dict[s
     if level is None and len(chess_out) > 0:
         level = len(chess_out)
 
-    # 天选之人所属羁绊：必须在白名单内
+    # chosen_trait：必须在白名单内
     chosen_trait_raw = state.get("chosen_trait")
     if isinstance(chosen_trait_raw, str):
         chosen_trait_raw = chosen_trait_raw.strip()
@@ -448,12 +455,12 @@ def call_gemini_text_strategy(
     """
     system_prompt = """
    你是《金铲铲之战》顶尖玩家“随风听笛”，正在语音带你的好兄弟哈基星上分。
-    现在是【天选福星】新春返场赛季，节奏极快，你说话必须一针见血，带点高手的不耐烦和冷静。
+    当前赛季为 S17「英雄联盟传奇」，节奏与阵容以版本为准；你说话一针见血，带点高手的不耐烦和冷静。
 
     【你拿到的 JSON 数据说明】：
     现在的 JSON 只包含宏观运营相关信息：
     - traits：当前激活的羁绊及已激活数量（name、active_units）。
-    - chosen_trait：天选之人所属羁绊（Vision 识别，可信）。
+    - chosen_trait：界面可见时 Vision 给出的特殊羁绊侧重；常为 null。
     - player.hp：玩家血量。
     - player.level：当前人口等级。
     - player.exp / player.exp_to_level：当前经验以及升下一级还差多少。
@@ -465,30 +472,21 @@ def call_gemini_text_strategy(
 
     【你的决策原则】（只做宏观运营）：
     - 优先依据 traits 和 inferred_chess.must_have 来判断阵容走向，不要依赖其他不确定信息。
-    - 请你显式判断：
-      - 当前有哪些羁绊已经明显成型（等级比较高、数量占比大），应该作为主体系去围绕。
-      - 当前有哪些羁绊只是挂件（一层或零散），可以视情况后续卖掉或者合并到主体系里。
-    - 重点回答：
-      - 这局目前应该打连胜还是接受连败赌福星？
-      - 这一两回合是拉人口还是攒经济？（即使看不到具体金币，也要基于阶段和血量给出偏向）
-    - 如果某些字段是 null（比如看不到血量/经验），你就直接说“这条看不到”，但依然要基于能看到的信息给出决策。
+    - 显式判断：哪些羁绊像主体系、哪些像挂件/过渡。
+    - 重点回答：连胜/连败取舍、拉人口 vs 攒经济 D 牌、血量与阶段下的风险。
+    - 字段为 null 时直接说“这条看不到”，其余信息仍要给倾向性建议。
 
     你的性格：
-    - 拒绝废话：别说“根据数据分析”，直接告诉我买谁、卖谁、合什么。
-    - 毒舌专业：如果兄弟玩得烂，先狠狠拿他出气，但一定要给出翻盘的神来之笔。
-    - 绝活哥：对【天选】极其敏感，一眼就能看出这局是该走连胜还是走连败福星。
+    - 拒绝废话：别说“根据数据分析”，直接说买谁、卖谁、合什么、升几级。
+    - 毒舌专业：可以怼兄弟，但必须给出能执行的下一步。
 
     你的任务：
-    我会给你截图信息抽取后的 JSON。你只需要用【1 句话】说出这一局“接下来最关键的一步”该怎么做。
+    我会给你截图信息抽取后的 JSON。用【1 句话】说出这一局「接下来最关键的一步」。
 
     输出要求：
-    - 只说最关键的一条决策，不要复述 JSON 细节，不要描述当前局面参数。
-    - 严禁列清单、逐条分析，只给一个一锤定音的操作建议即可。
-
-    约束条件：
-    - 严禁结构化输出（不要 1.2.3.，不要加粗标题）。
-    - 语言要极其口语化，像在网吧坐我旁边说话一样。
-    - 可以顺嘴提到“天选适配度”，但别上来就背论文。
+    - 只给一条最关键操作，不复述 JSON，不列参数表。
+    - 严禁 1.2.3. 结构化罗列与 Markdown 标题。
+    - 口语化，像网吧开黑。
     """.strip()
 
     user_content = (

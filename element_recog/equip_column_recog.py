@@ -39,11 +39,13 @@ except ImportError:
     from bars_recog import iter_input_images  # type: ignore
 
 # 本文件位于 element_recog/ 时，工程根为上一级（对局截图、equip_gallery、默认可写输出仍在项目根）
+from project_paths import DEFAULT_OUT_EQUIP_COLUMN
+
 _SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = _SCRIPT_DIR.parent if _SCRIPT_DIR.name == "element_recog" else _SCRIPT_DIR
 DEFAULT_INPUT = PROJECT_DIR / "对局截图"
 DEFAULT_GALLERY = PROJECT_DIR / "equip_gallery"
-DEFAULT_OUT = PROJECT_DIR / "equip_column_recog"
+DEFAULT_OUT = DEFAULT_OUT_EQUIP_COLUMN
 
 DEFAULT_EQUIP_ROI = (10, 120, 190, 920)  # x1,y1,x2,y2（按你给的“左侧竖条”默认推断）
 
@@ -548,7 +550,7 @@ def main() -> None:
         "--grid-rows",
         type=int,
         default=10,
-        help="装备栏 ROI 切块行数（默认 10，与 battle_pipeline_v3 一致；可改小减负）",
+        help="装备栏 ROI 切块行数（默认 10，与 pipeline 一致；可改小减负）",
     )
     ap.add_argument(
         "--skip-block-min-std",
