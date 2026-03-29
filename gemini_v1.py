@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Pipeline 对局 JSON → 战术快报（语义压缩）→ 阵容 RAG 检索 → Gemini Flash 回答。
+Pipeline 对局 JSON → 战术快报（含棋盘棋子星级）→ 阵容智库 RAG + 棋子智库 RAG → 随风听笛回答。
 
 用法示例：
   python gemini_v1.py
   # 默认：若 runs/battle_pipeline_v3_out 已有 *_summary.json 则读缓存；否则静默跑 pipeline。
   python gemini_v1.py --summary-json runs/.../01-a_summary.json  # 跳过 pipeline，仅调试
   python gemini_v1.py --img-dir "对局截图" -q "我这把该先合什么？"
-  python gemini_v1.py --no-rag   # 关闭本地阵容 RAG，只喂战术快报 + 问题
+  python gemini_v1.py --no-rag   # 关闭本地 RAG（阵容+棋子），只喂战术快报 + 问题
+
+  交互终端下：随风听笛答完后可继续输入追问（首轮已含快报与双智库，追问不重跑 RAG）；空行或 q / quit / exit 结束。
+  管道或非 TTY  stdin：只跑一轮（与原先一致）。
 
 说明：
   - 当前 LLM：默认 OpenRouter，模型 id 见 .env 的 OPENROUTER_TEXT_MODEL（如 google/gemini-2.5-flash，即 Gemini Flash 系）。
@@ -26,7 +29,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -83,6 +86,15 @@ PIPELINE_CACHE_DIR = REPO_ROOT / "runs" / "battle_pipeline_v3_out"
 DEFAULT_PIPELINE_OUT = PIPELINE_CACHE_DIR
 DEFAULT_IMG_DIR = REPO_ROOT / "对局截图"
 DEFAULT_RAG_LINEUP = REPO_ROOT / "data" / "rag_lineup_lineup.jsonl"
+DEFAULT_RAG_CORE_CHESS = REPO_ROOT / "data" / "rag_core_chess.jsonl"
+# 阵容攻略 quality：字母越靠前越强（与掌盟评级一致）
+_LINEUP_QUALITY_ORDER = "SABCDEFGH"
+
+
+def _lineup_quality_rank(q: str) -> int:
+    c = (q or "").strip().upper()[:1]
+    i = _LINEUP_QUALITY_ORDER.find(c)
+    return i if i >= 0 else len(_LINEUP_QUALITY_ORDER) + 5
 
 
 def _normalize_openrouter_api_key(raw: str) -> str:
@@ -220,6 +232,19 @@ def _resolve_chat_backend() -> str:
     raise RuntimeError(f"未知 GEMINI_BACKEND={pref!r}，请使用 openrouter / google / google_only / auto")
 
 
+def _google_hist_to_contents(chat_hist: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """OpenAI 风格 user/assistant 轮次 → Gemini generateContent 的 contents（assistant→model）。"""
+    out: List[Dict[str, Any]] = []
+    for m in chat_hist:
+        role = str(m.get("role") or "")
+        text = str(m.get("content") or "")
+        if role == "user":
+            out.append({"role": "user", "parts": [{"text": text}]})
+        elif role == "assistant":
+            out.append({"role": "model", "parts": [{"text": text}]})
+    return out
+
+
 def _google_gemini_generate(
     *,
     system_prompt: str,
@@ -228,14 +253,35 @@ def _google_gemini_generate(
     temperature: float = 0.35,
     timeout_s: float = 120.0,
 ) -> str:
-    """Gemini Developer API generateContent（REST），不经 OpenRouter。"""
+    """Gemini 单轮（兼容旧调用）。"""
+    return _google_gemini_chat(
+        system_prompt=system_prompt,
+        chat_hist=[{"role": "user", "content": user_text}],
+        model=model,
+        temperature=temperature,
+        timeout_s=timeout_s,
+    )
+
+
+def _google_gemini_chat(
+    *,
+    system_prompt: str,
+    chat_hist: List[Dict[str, str]],
+    model: str,
+    temperature: float = 0.35,
+    timeout_s: float = 120.0,
+) -> str:
+    """Gemini Developer API 多轮：chat_hist 为 user/assistant 交替，须以 user 开头。"""
     key = _google_gemini_key()
     if not key:
         raise RuntimeError("缺少 GEMINI_API_KEY / GOOGLE_API_KEY")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    contents = _google_hist_to_contents(chat_hist)
+    if not contents:
+        raise RuntimeError("Gemini 多轮 contents 为空")
     body: Dict[str, Any] = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+        "contents": contents,
         "generationConfig": {"temperature": temperature},
     }
     r = requests.post(url, params={"key": key}, json=body, timeout=timeout_s)
@@ -262,6 +308,51 @@ def _field_parsed(player: Dict[str, Any], key: str) -> str:
     return ""
 
 
+def _star_part_from_row(r: Dict[str, Any]) -> str:
+    """棋子星级（fightboard / pipeline confirmed 行内的 star.pred）。"""
+    st = r.get("star")
+    if not isinstance(st, dict):
+        return ""
+    pr = st.get("pred")
+    try:
+        n = int(pr)
+    except (TypeError, ValueError):
+        return ""
+    if 1 <= n <= 3:
+        return f" {n}星"
+    return ""
+
+
+def _board_line_hero_display_name(r: Dict[str, Any]) -> str:
+    """单格棋子展示名：与战报「棋盘与装备」一致（数据源为 TCV 写入的 confirmed_fightboard_results 每行 best；低置信度加 ?）。"""
+    if not isinstance(r, dict):
+        return "?"
+    name = str(r.get("best") or "?")
+    conf = str(r.get("confidence") or "")
+    if conf == "low":
+        name = f"{name}?"
+    return name
+
+
+def _tcv_board_hero_names_for_rag(summary: Dict[str, Any]) -> List[str]:
+    """
+    仅用于棋子智库：与战术快报棋盘行同源的棋子名列表（去重保序）。
+    匹配 jsonl 时去掉展示用尾随 ?，不包含羁绊栏关键词。
+    """
+    rows = summary.get("confirmed_fightboard_results")
+    if not isinstance(rows, list):
+        return []
+    out: List[str] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        disp = _board_line_hero_display_name(r)
+        key = disp.rstrip("?").rstrip("？").strip()
+        if key and key not in ("?", "？"):
+            out.append(key)
+    return list(dict.fromkeys(out))
+
+
 def _format_board_lines(summary: Dict[str, Any]) -> List[str]:
     rows = summary.get("confirmed_fightboard_results")
     if not isinstance(rows, list):
@@ -272,10 +363,7 @@ def _format_board_lines(summary: Dict[str, Any]) -> List[str]:
     for r in rows:
         if not isinstance(r, dict):
             continue
-        name = str(r.get("best") or "?")
-        conf = str(r.get("confidence") or "")
-        if conf == "low":
-            name = f"{name}?"
+        name = _board_line_hero_display_name(r)
         pos = r.get("position") or {}
         loc = ""
         if isinstance(pos, dict):
@@ -298,8 +386,35 @@ def _format_board_lines(summary: Dict[str, Any]) -> List[str]:
                         eqs.append(n)
         eq_str = "、".join(eqs) if eqs else "无"
         loc_s = loc if loc else "?"
-        lines.append(f"{name} 站位{loc_s} | 装备:{eq_str}")
+        sx = _star_part_from_row(r)
+        lines.append(f"{name} 站位{loc_s}{sx} | 装备:{eq_str}")
     return lines
+
+
+def _self_hp_from_player(player: Dict[str, Any]) -> str:
+    """从 player_onnx 血量列解析「我」对应行的血量；无则返回空串。"""
+    fields = (player.get("fields") or {}) if isinstance(player, dict) else {}
+    hp_nick = fields.get("hp_nick")
+    if not isinstance(hp_nick, dict):
+        return ""
+    cells = hp_nick.get("player_cells")
+    if not isinstance(cells, list):
+        return ""
+    for c in cells:
+        if not isinstance(c, dict):
+            continue
+        idt = str(c.get("id_text") or "").strip()
+        if idt in ("我", "自己"):
+            hpv = str(c.get("hp") or "").strip()
+            if hpv and hpv != "?":
+                return hpv
+            return ""
+    # 部分对局 OCR 未认出「我」但列表第一项即本人
+    if len(cells) == 1 and isinstance(cells[0], dict):
+        hpv = str(cells[0].get("hp") or "").strip()
+        if hpv and hpv != "?":
+            return hpv
+    return ""
 
 
 def _equip_column_labels(summary: Dict[str, Any]) -> str:
@@ -327,6 +442,8 @@ def build_tactical_brief(summary: Dict[str, Any]) -> str:
     exp = _field_parsed(player, "exp")
     gold = _field_parsed(player, "gold")
     streak = _field_parsed(player, "streak")
+    my_hp = _self_hp_from_player(player)
+    hp_self = my_hp if my_hp else "?"
 
     bonds_line = str(gt.get("merged_bonds_one_line") or "").strip()
     tm = gt.get("trait_count_max") if isinstance(gt, dict) else None
@@ -339,13 +456,13 @@ def build_tactical_brief(summary: Dict[str, Any]) -> str:
     board_block = "\n".join(f"  - {x}" for x in board_lines) if board_lines else "  (无)"
 
     return f"""[当前局势]
-阶段 {phase or '?'} | 等级 {level or '?'} | 经验 {exp or '?'} | 金币 {gold or '?'} | 胜负 {streak or '?'}
+阶段 {phase or '?'} | 等级 {level or '?'} | 经验 {exp or '?'} | 金币 {gold or '?'} | 胜负 {streak or '?'} | 我的血量 {hp_self}
 
 [羁绊]
 {trait_summary}
 
 [棋盘与装备]
-（「站位」后括号为棋盘行,列）
+（「站位」后为棋盘行,列；紧邻为棋子识别星级，来自 fightboard）
 {board_block}
 
 [左侧装备栏散件]
@@ -369,8 +486,17 @@ def _load_lineup_docs(path: Path) -> List[Dict[str, Any]]:
     return out
 
 
-def _extract_keywords_for_rag(summary: Dict[str, Any]) -> List[str]:
-    """从 summary 抽可用于匹配阵容攻略的关键词（羁绊名、英雄名）。"""
+def _extract_keywords_for_rag(
+    summary: Dict[str, Any],
+    *,
+    include_fightboard_agg_top: bool = True,
+) -> List[str]:
+    """从 summary 抽可用于匹配阵容攻略的关键词（羁绊名、英雄名）。
+
+    include_fightboard_agg_top：是否把 fightboard 每格 Top-K 备选名也当关键词。
+    阵容检索开启有助于在识别摇摆时仍能命中攻略；棋子智库应关闭，否则会召回到「未采纳的备选」
+    （战报只展示 best，用户会看到「棋盘上没人却命中该棋子」）。
+    """
     keys: List[str] = []
     analysis = summary.get("analysis") or {}
     gt = (analysis.get("group_traits_merged") or {}) if isinstance(analysis, dict) else {}
@@ -385,11 +511,12 @@ def _extract_keywords_for_rag(summary: Dict[str, Any]) -> List[str]:
                 b = str(r.get("best") or "").strip()
                 if b and b not in ("?",):
                     keys.append(b)
-                for at in (r.get("agg_top") or [])[:2]:
-                    if isinstance(at, dict):
-                        n = str(at.get("name") or "").strip()
-                        if n:
-                            keys.append(n)
+                if include_fightboard_agg_top:
+                    for at in (r.get("agg_top") or [])[:2]:
+                        if isinstance(at, dict):
+                            n = str(at.get("name") or "").strip()
+                            if n:
+                                keys.append(n)
     # 去重保序
     seen: set[str] = set()
     out: List[str] = []
@@ -424,14 +551,21 @@ def retrieve_lineup_rag(
     summary: Dict[str, Any],
     rag_path: Path,
     top_k: int = 3,
+    *,
+    min_quality: Optional[str] = None,
 ) -> Tuple[str, List[str], List[Dict[str, Any]]]:
     """
     简易检索：关键词在阵容 doc['text'] 中的命中数（无需向量库）。
+    min_quality：如 A 表示仅保留评级不劣于 A 的攻略（S 优于 A）。
     返回 (拼好的 RAG 文本块, lineup_id 列表, 终端展示用元数据列表)。
     """
     docs = _load_lineup_docs(rag_path)
+    mq = (min_quality or "").strip().upper()[:1]
+    if mq and mq in _LINEUP_QUALITY_ORDER:
+        max_rank = _lineup_quality_rank(mq)
+        docs = [d for d in docs if _lineup_quality_rank(str(d.get("quality") or "")) <= max_rank]
     if not docs:
-        return ("（阵容 RAG 库未加载或为空。）", [], [])
+        return ("（阵容智库 RAG 在给定评级过滤下无可用条目或文件为空。）", [], [])
 
     kws = _extract_keywords_for_rag(summary)
     if not kws:
@@ -478,87 +612,190 @@ def retrieve_lineup_rag(
     return ("\n\n".join(blocks), ids, meta)
 
 
+def retrieve_core_chess_rag(
+    summary: Dict[str, Any],
+    rag_path: Path,
+    top_k: int = 8,
+) -> Tuple[str, List[str], List[Dict[str, Any]]]:
+    """
+    棋子智库：rag_core_chess.jsonl，**仅**按战术快报「棋盘与装备」上的棋子名检索
+   （summary.confirmed_fightboard_results，与 TCV confirmed 一致；不用羁绊、不用 agg_top、不扫文档全文）。
+    每条输出棋子名、定位（主C/主坦/打工仔等）、推荐装备。
+    """
+    docs = _load_lineup_docs(rag_path)
+    core = [
+        d
+        for d in docs
+        if str(d.get("type") or "") == "core_chess"
+        or str(d.get("id") or "").startswith("core_chess:")
+    ]
+    if not core:
+        return ("（棋子智库 RAG 库未加载或为空。）", [], [])
+
+    priority = _tcv_board_hero_names_for_rag(summary)
+    if not priority:
+        return (
+            "（棋子智库：无 confirmed_fightboard_results 或无有效棋子名，跳过场上棋子检索。）",
+            [],
+            [],
+        )
+
+    def _score_one(d: Dict[str, Any]) -> int:
+        cn = str(d.get("chess_name") or "")
+        sc = 0
+        for kw in priority:
+            if not kw or len(kw) < 2:
+                continue
+            if cn == kw:
+                sc += 10
+            elif kw in cn or cn in kw:
+                sc += 5
+        return sc
+
+    scored: List[Tuple[int, Dict[str, Any]]] = [(_score_one(d), d) for d in core]
+    scored.sort(key=lambda x: (-x[0], str((x[1] or {}).get("chess_name") or "")))
+    picked = [x for x in scored if x[0] > 0][: max(1, int(top_k))]
+    if not picked:
+        return (
+            "（棋子智库：场上棋子名未在库中命中；可检查 legend/棋子库拼写是否一致。）",
+            [],
+            [],
+        )
+
+    blocks: List[str] = []
+    ids: List[str] = []
+    meta: List[Dict[str, Any]] = []
+    for sc, d in picked:
+        cid = str(d.get("id") or d.get("chess_name") or "")
+        ids.append(cid)
+        cn = str(d.get("chess_name") or "?")
+        m = d.get("meta") if isinstance(d.get("meta"), dict) else {}
+        role = str(m.get("slot_role") or "未知")
+        equips = m.get("recommended_equips") if isinstance(m.get("recommended_equips"), list) else []
+        eq_lines = [str(x).strip() for x in equips if str(x).strip()]
+        eq_s = "、".join(eq_lines) if eq_lines else "（库中暂无推荐成装）"
+        blocks.append(
+            f"--- [{cn}] 定位：{role}（匹配分≈{sc}）---\n推荐装备：{eq_s}"
+        )
+        meta.append(
+            {
+                "id": cid,
+                "chess_name": cn,
+                "slot_role": role,
+                "match_score": int(sc),
+                "recommended_equips": eq_lines,
+            }
+        )
+
+    return ("\n\n".join(blocks), ids, meta)
+
+
 def _coach_system_prompt() -> str:
-    return """
-你是《金铲铲之战》顶尖玩家随风听笛，正在网吧叼着烟、开着语音带你的菜鸡好兄弟哈基星上分。
-你不仅能看到他的实时 JSON 战报，还能听到他的提问。
-你脑子里装着全版本的最强阵容 RAG 库，说话一针见血，带着高手那种带不动你的不耐烦和极致的冷静。
+    return """你是《金铲铲之战》S17 顶尖高手“随风听笛”。你正叼着烟在网吧带菜鸡兄弟“哈基星”上分。你不仅有全服顶级的操作直觉，还有一张能把哈基星喷退游的嘴以及奇妙的幽默感。
 
-【你的输入结构说明】：
-你会收到一段结构化文本：
-1. [哈基星问题]：来自哈基星的弱智提问，请你根据他的问题＋下列对局信息回答。
-2. [当前局势]：关注阶段（如5-5）和金币，这是判断该「梭哈」还是「存钱」的唯一依据。
-3. [羁绊]：这是灵魂。你要一眼看出哪些是核心（如3比尔吉沃特/3诺克萨斯），哪些是路边捡的垃圾挂件。
-4. [棋盘与装备]：关注核心输出（如4行后排的瑞兹/女枪）的装备是否对劲，前排（1行）肉装是否顶得住。
-5. [左侧装备栏散件]：这是你唯一的变数，如果散件能合成关键装，立刻开喷让他合。
-6. [阵容RAG库]：通过关键词命中的本地阵容库，用来对「阵容名 / 运营节奏」做参照。
+### 第一步：【你的输入情报汇总】
+你会收到包含以下信息的结构化文本，这是你判定的唯一依据：
+1. **哈基星提问**：他的语音原话（多轮时首轮为完整块，后续轮次可能只有一句追问，仍视为同一局、同一套快报与 RAG，勿让哈基星复述战报）。
+2. **战术快报**：包含 [阶段/等级/经验/金币/胜负/我的血量/羁绊/棋盘装备/装备栏散件]。
+3. **阵容智库 (RAG)**：当前的终点站目标与运营节奏。
+4. **棋子智库 (RAG)**：谁是核心（主C/主坦/打工仔），谁该拿什么装备。
 
-【你的处理逻辑】：
-- 意图识别：如果哈基星的问题是具体的（合什么装备、D不D牌），必须优先回答问题；如果问题是含糊的（怎么办、玩什么），则基于阵容RAG库与战术快报进行分析；
-- 运营定性：只看羁绊和关键棋子的星级 / 装备，匹配相近的阵容RAG，并基于RAG库指导哈基星下一步的行动；
-- 资源优化：基于阵容RAG，分析当前金币与装备散件是否最优利用，若无则激情开喷。
+### 第二步：【随风听笛的脑内回路】（思考逻辑，不准输出）
+1. **抓大腿**：对比快报与棋子智库，看场上谁是真神（2星高费 > 1星高费 > 2星低费）。
+2. **找缺口**：主C满三件套没？主坦顶得住吗？站位是不是在送？
+   - **搜牌保底逻辑**：如果 RAG 阵容已经成型或不知道搜谁，可下令搜【通用5费主C/主坦】：包括奥巴马/稻草人/龙女/千珏/炸弹人/塞拉斯）。
+3. **断节奏**：5阶段以后血低于40还不D牌？9级50块等死？看[阶段/金币]断定该搜还是该攒。
+4. **定方向**：对比阵容智库，看哈基星是在玩版本答案还是在玩勾八。
 
-【你的分析逻辑】：
-1. 抓大腿：扫一眼 JSON，确定场上谁是真正的爹。优先看 2 星及以上的核心羁绊卡，不要被 1 星的高费卡晃了眼。
-2. 找缺口：对比【阵容 RAG 库】，看场上主 C 是不是对的人，装备是不是对的件。
-3. 装备铁律：主 C 三件套没满前，散件全是主 C 的！除非主 C 只有 1 星且烂泥扶不上墙，否则绝不分给外人。
-4. 战力即正义：5 阶段以后，所有不转成战力的金币和散件都是在等死。
+### 第三步：【你的输出协议】
+1. **意图第一**：
+    - 问具体的（合什么、D不D、找谁）：**直接给死命令**，不要扯其他方面的建议。
+    - 问模糊的（救命、玩什么）：**抓当前最致命的短板（如：该D不D、主C没装、站位逆天）暴力纠错**。
+2. **反教条主义**：场上已成型的 4费 / 5费 2星主C或主坦是绝对资产，**严禁** 为了凑 RAG 阵容让他卖掉大腿或扒装备。
+3. **装备铁律：**装备只能给【战术快报】中存在的棋子，且优先给主C / 主坦，其次是打工仔，最后才是挂件；如果棋子已经满装备了，严禁再建议给装备。
+4. **信息脱敏**：严禁复述 JSON 参数，严禁展示思考过程，严禁 1.2.3. 或 Markdown。
 
-【你的性格：随风听笛】
-- 拒绝废话：严禁说建议、根据数据、分析显示，务必使用超级口语化的风格
-- 毒舌专业：你可以骂哈基星操作烂，但必须告诉他下一步是卖谁、升几级、还是合什么。
-- 战术直觉：看到 9 级 50 块还带一堆 1 星卡，你就要原地爆炸。
+### 第四步：【性格与语言风格】
+- **拒绝废话**：不准说建议、分析、根据、可能。只有【1句话】，必须是纯口语。
+- **毒舌幽默**：挖苦哈基星是日常，但他操作偶尔对了一次，也要夸奖一下他。
+- **黑话简称**：尽量不说棋子或装备的官方名称，改为非正式简称，例如奥巴马、反甲等。
+- **真人气息：**若哈基星问你游戏之外的问题，按照你的兄弟人设正常回答即可，不一定非要跟金铲铲有关。"""
 
-【输出要求】：
-- 严禁任何 Markdown 标题、1.2.3. 结构、或列表。
-- 严禁复述 JSON 里的参数。
-- 只有【1~2 句话】，必须是纯口语，像在网吧叼着烟戴着耳机开黑。
-- 语气示例：「哈基星你这个蠢货，又他妈要存50块钱买棺材板啊？赶紧全D了找 2 星瑞兹，找不到你赶紧卸载游戏回去玩你那泳装蓝梦吧。」
-""".strip()
+
+def _coach_first_user_message(
+    tactical_brief: str,
+    rag_lineup_block: str,
+    rag_chess_block: str,
+    user_question: str,
+) -> str:
+    return (
+        "【哈基星问题】\n"
+        f"{user_question.strip()}\n\n"
+        "【战术快报】\n"
+        f"{tactical_brief.strip()}\n\n"
+        "【阵容智库 (RAG)】\n"
+        f"{rag_lineup_block.strip()}\n\n"
+        "【棋子智库 (RAG)】\n"
+        f"{rag_chess_block.strip()}"
+    )
+
+
+def _coach_followup_user_message(user_question: str) -> str:
+    return "【哈基星追问】\n" f"{user_question.strip()}"
+
+
+def coach_chat_complete_turn(
+    chat_hist: List[Dict[str, str]],
+    *,
+    model: str | None = None,
+    temperature: float = 0.35,
+) -> str:
+    """
+    多轮中的一步：chat_hist 须为 OpenAI 式 messages（不含 system），且以 user 开头、user/assistant 严格交替。
+    本函数发送「system + 整段 chat_hist」，返回本步 assistant 文本。
+    """
+    if not chat_hist or chat_hist[0].get("role") != "user":
+        raise ValueError("chat_hist 必须以 user 开头")
+    backend = _resolve_chat_backend()
+    _, _, default_or_model = _openrouter_env()
+    sys_p = _coach_system_prompt()
+    if backend == "google":
+        gm = (model or os.getenv("GEMINI_MODEL", "gemini-2.0-flash")).strip()
+        print(
+            f"[gemini_v1] LLM 后端: google  模型: {gm}  上下文: {len(chat_hist)} 条 user/model 消息"
+        )
+        return _google_gemini_chat(
+            system_prompt=sys_p,
+            chat_hist=list(chat_hist),
+            model=gm,
+            temperature=temperature,
+        )
+    om = model or default_or_model
+    print(
+        f"[gemini_v1] LLM 后端: openrouter  模型: {om}  上下文: {len(chat_hist)} 条 user/assistant 消息"
+    )
+    return _openrouter_chat_completion(
+        messages=[{"role": "system", "content": sys_p}, *chat_hist],
+        model=om,
+        temperature=temperature,
+    )
 
 
 def call_gemini_coach(
     tactical_brief: str,
-    rag_block: str,
+    rag_lineup_block: str,
+    rag_chess_block: str,
     user_question: str,
     *,
     model: str | None = None,
 ) -> str:
     """
-    单轮对话：system = 随风听笛人设；user = 一段字符串，按顺序拼接
-    【哈基星问题】+【实时战术快报】+【阵容 RAG 库·命中摘录】（RAG 为本地 jsonl 检索出的攻略长文，非向量嵌入）。
-    OpenRouter / Google 均为 messages[0]=system、messages[1]=user。
+    单轮便捷封装（兼容脚本与 benchmark）：等同只发一条首轮 user。
     """
-    user_content = (
-        "【哈基星问题】\n"
-        f"{user_question.strip()}\n\n"
-        "【实时战术快报（JSON 识别结果）】\n"
-        f"{tactical_brief.strip()}\n\n"
-        "【阵容 RAG 库·命中摘录】\n"
-        f"{rag_block.strip()}"
+    u = _coach_first_user_message(
+        tactical_brief, rag_lineup_block, rag_chess_block, user_question
     )
-    backend = _resolve_chat_backend()
-    _, _, default_or_model = _openrouter_env()
-    coach_temp = 0.35
-    if backend == "google":
-        gm = (model or os.getenv("GEMINI_MODEL", "gemini-2.0-flash")).strip()
-        print(f"[gemini_v1] LLM 后端: google  模型: {gm}")
-        return _google_gemini_generate(
-            system_prompt=_coach_system_prompt(),
-            user_text=user_content,
-            model=gm,
-            temperature=coach_temp,
-        )
-    om = model or default_or_model
-    print(f"[gemini_v1] LLM 后端: openrouter  模型: {om}")
-    return _openrouter_chat_completion(
-        messages=[
-            {"role": "system", "content": _coach_system_prompt()},
-            {"role": "user", "content": user_content},
-        ],
-        model=om,
-        temperature=coach_temp,
-    )
+    return coach_chat_complete_turn([{"role": "user", "content": u}], model=model)
 
 
 def _dir_has_screenshot(d: Path) -> bool:
@@ -701,12 +938,12 @@ def _pipeline_quiet_progress_until(
             io_lock.release()
 
 
-def main() -> None:
+def build_coach_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="Pipeline JSON → 战术快报 + RAG → Gemini 教练",
+        description="Pipeline JSON → 战术快报 + 双智库 RAG → 随风听笛",
         epilog="默认优先使用 runs/battle_pipeline_v3_out 下已有 *_summary.json（跳过 pipeline）；\n"
         "无缓存时再跑 pipeline（stderr 转圈；输入问题时暂停刷新）。\n"
-        "快报预览后直接请求教练。--force-pipeline 可强制重新识别。--no-rag 可关闭阵容 RAG。--summary-json 指定单文件调试。",
+        "快报预览后直接请求模型。--force-pipeline 可强制重新识别。--no-rag 可关闭阵容+棋子 RAG。--summary-json 指定单文件调试。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument(
@@ -743,18 +980,221 @@ def main() -> None:
         default=DEFAULT_RAG_LINEUP,
         help="rag_lineup_lineup.jsonl 路径",
     )
-    ap.add_argument("--rag-top-k", type=int, default=3, help="检索阵容条数")
+    ap.add_argument("--rag-top-k", type=int, default=3, help="阵容智库检索条数")
+    ap.add_argument(
+        "--rag-core-chess",
+        type=Path,
+        default=DEFAULT_RAG_CORE_CHESS,
+        help="棋子智库 rag_core_chess.jsonl 路径",
+    )
+    ap.add_argument("--rag-chess-top-k", type=int, default=8, help="棋子智库检索条数上限")
+    ap.add_argument(
+        "--rag-min-quality",
+        type=str,
+        default="A",
+        help="阵容智库：仅保留该评级及以上（S 最优；默认 A 即只检索 S 与 A）。传 - 或 all 表示不按评级过滤",
+    )
     ap.add_argument(
         "--no-rag",
         action="store_true",
-        help="不检索、不注入 rag_lineup_lineup.jsonl，仅用战术快报 + 问题调教练（对比带 RAG 效果）",
+        help="不检索阵容/棋子 jsonl，仅用战术快报 + 问题",
     )
     ap.add_argument(
         "--pipeline-verbose",
         action="store_true",
         help="将 pipeline 子进程的 stdout/stderr 原样打到终端（关闭静默与进度条；调试用）",
     )
+    return ap
+
+
+def build_coach_bundle(
+    args: argparse.Namespace,
+    summary_path: Path,
+) -> Dict[str, Any]:
+    """读 summary、构建战术快报与双智库 RAG；供 gemini_v2 与录音并行。"""
+    t_prep0 = time.perf_counter()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    brief = build_tactical_brief(summary)
+    _rq = (args.rag_min_quality or "A").strip()
+    if _rq.lower() in ("-", "all", "none", "off", "*"):
+        min_q: Optional[str] = None
+    else:
+        mq = _rq.upper()[:1]
+        min_q = mq if mq in _LINEUP_QUALITY_ORDER else "A"
+    if args.no_rag:
+        rag_block = "（本回合未注入阵容智库。）"
+        rag_meta: List[Dict[str, Any]] = []
+        chess_block = "（本回合未注入棋子智库。）"
+        chess_meta: List[Dict[str, Any]] = []
+    else:
+        rag_block, _rag_ids, rag_meta = retrieve_lineup_rag(
+            summary,
+            args.rag_lineup,
+            top_k=max(1, int(args.rag_top_k)),
+            min_quality=min_q,
+        )
+        chess_block, _chess_ids, chess_meta = retrieve_core_chess_rag(
+            summary,
+            args.rag_core_chess.resolve(),
+            top_k=max(1, int(args.rag_chess_top_k)),
+        )
+    t_prep1 = time.perf_counter()
+    return {
+        "summary": summary,
+        "brief": brief,
+        "rag_block": rag_block,
+        "chess_block": chess_block,
+        "rag_meta": rag_meta,
+        "chess_meta": chess_meta,
+        "t_prep0": t_prep0,
+        "t_prep1": t_prep1,
+    }
+
+
+def print_coach_bundle_preview(args: argparse.Namespace, bundle: Dict[str, Any]) -> None:
+    """终端打印三块预览（与送入模型一致）。"""
+    brief = str(bundle.get("brief") or "")
+    rag_meta = bundle.get("rag_meta") or []
+    chess_meta = bundle.get("chess_meta") or []
+    print("\n" + "=" * 60)
+    print("【1. 战术快报】（预览）")
+    print("=" * 60)
+    print(brief[:2000] + ("…" if len(brief) > 2000 else ""))
+    print("\n" + "=" * 60)
+    print("【2. 阵容智库 RAG】命中（与送入模型一致）")
+    print("=" * 60)
+    if args.no_rag:
+        print("（已跳过：--no-rag）")
+    elif not rag_meta:
+        print("（无命中或库为空）")
+    else:
+        for m in rag_meta:
+            if not isinstance(m, dict):
+                continue
+            print(
+                f"lineup_id={m.get('lineup_id', '')} | "
+                f"评级={m.get('quality', '')} | "
+                f"赛季={m.get('season', '')} | "
+                f"匹配分≈{m.get('match_score', 0)} | "
+                f"阵容名：{m.get('name', '')}"
+            )
+    print("\n" + "=" * 60)
+    print("【3. 棋子智库 RAG】命中（与送入模型一致）")
+    print("=" * 60)
+    if args.no_rag:
+        print("（已跳过：--no-rag）")
+    elif not chess_meta:
+        print("（无命中或库为空）")
+    else:
+        for m in chess_meta:
+            if not isinstance(m, dict):
+                continue
+            eqs = m.get("recommended_equips") or []
+            eq_show = (
+                "、".join(str(x) for x in eqs[:12])
+                if isinstance(eqs, list)
+                else ""
+            )
+            print(
+                f"{m.get('chess_name', '')} | 定位={m.get('slot_role', '')} | "
+                f"匹配分≈{m.get('match_score', 0)} | 推荐装：{eq_show or '（无）'}"
+            )
+    print("=" * 60)
+
+
+def run_coach_after_summary(
+    args: argparse.Namespace,
+    summary_path: Path,
+    question: str,
+    io_lock: threading.Lock,
+    *,
+    follow_up_reader: Optional[Callable[[], str]] = None,
+    log_prefix: str = "gemini_v1",
+    coach_bundle: Optional[Dict[str, Any]] = None,
+    skip_bundle_preview_print: bool = False,
+) -> None:
+    """从已定位的 *_summary.json 起：RAG、预览、多轮教练对话（可注入追问输入函数，供 gemini_v2 语音等）。"""
+    if coach_bundle is None:
+        coach_bundle = build_coach_bundle(args, summary_path)
+        if not skip_bundle_preview_print:
+            print_coach_bundle_preview(args, coach_bundle)
+    elif not skip_bundle_preview_print:
+        print_coach_bundle_preview(args, coach_bundle)
+
+    brief = str(coach_bundle.get("brief") or "")
+    rag_block = str(coach_bundle.get("rag_block") or "")
+    chess_block = str(coach_bundle.get("chess_block") or "")
+    t_prep0 = float(coach_bundle.get("t_prep0") or 0.0)
+    t_prep1 = float(coach_bundle.get("t_prep1") or 0.0)
+
+    chat_hist: List[Dict[str, str]] = [
+        {
+            "role": "user",
+            "content": _coach_first_user_message(
+                brief, rag_block, chess_block, question
+            ),
+        }
+    ]
+    ll_total = 0.0
+    turn = 0
+    answer = ""
+
+    def _default_follow_up() -> str:
+        io_lock.acquire()
+        try:
+            return input("哈基星：").strip()
+        finally:
+            io_lock.release()
+
+    reader = follow_up_reader if follow_up_reader is not None else _default_follow_up
+
+    while True:
+        turn += 1
+        print(f"\n正在请求 LLM（第 {turn} 轮）…\n")
+        t_ll0 = time.perf_counter()
+        answer = coach_chat_complete_turn(chat_hist)
+        t_ll1 = time.perf_counter()
+        round_sec = t_ll1 - t_ll0
+        ll_total += round_sec
+        print(
+            f"[{log_prefix}] 第 {turn} 轮模型响应耗时: {round_sec:.2f}s",
+            flush=True,
+        )
+
+        print("\n【随风听笛说】\n")
+        print(answer)
+        print()
+        if not sys.stdin.isatty():
+            break
+        print(
+            "—— 首轮已含战术快报与双智库 RAG，追问不必重跑检索；"
+            "模型依赖对话历史继续推理（上下文过长被截断时需新开一局或重喂快报）。"
+        )
+        print("—— 继续提问直接输入；空行或 q / quit / exit 结束。\n")
+        try:
+            nxt = reader()
+        except EOFError:
+            break
+        if not nxt or nxt.lower() in ("q", "quit", "exit", "bye", "再见"):
+            break
+        chat_hist.append({"role": "assistant", "content": answer})
+        chat_hist.append(
+            {"role": "user", "content": _coach_followup_user_message(nxt)}
+        )
+
+    print(f"[{log_prefix}] 本回合步骤耗时")
+    if args.no_rag:
+        print(f"  读 JSON + 构建快报（无 RAG）: {t_prep1 - t_prep0:.2f}s")
+    else:
+        print(f"  读 JSON + 构建快报 + 双智库 RAG: {t_prep1 - t_prep0:.2f}s")
+    print(f"  LLM 合计（{turn} 轮）: {ll_total:.2f}s")
+    print()
+
+
+def main() -> None:
+    ap = build_coach_argparser()
     args = ap.parse_args()
+    io_lock = threading.Lock()
 
     question = (args.question or "").strip()
     summary_path: Optional[Path] = None
@@ -806,7 +1246,6 @@ def main() -> None:
             pipe_err: List[Optional[Exception]] = [None]
             pipe_data: Dict[str, Any] = {"cap": None, "wall": 0.0}
             done = threading.Event()
-            io_lock = threading.Lock()
             quiet = not args.pipeline_verbose
 
             def _pipeline_worker() -> None:
@@ -868,56 +1307,7 @@ def main() -> None:
             summary_path = _find_first_summary_json(out_dir)
 
     assert summary_path is not None
-    t_prep0 = time.perf_counter()
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    brief = build_tactical_brief(summary)
-    if args.no_rag:
-        rag_block = "（本回合未注入本地阵容 RAG，仅依据战术快报与问题回答。）"
-        rag_ids = []
-        rag_meta = []
-    else:
-        rag_block, rag_ids, rag_meta = retrieve_lineup_rag(
-            summary, args.rag_lineup, top_k=max(1, int(args.rag_top_k))
-        )
-    t_prep1 = time.perf_counter()
-
-    print("\n" + "=" * 60)
-    print("战术快报（预览）")
-    print("=" * 60)
-    print(brief[:2000] + ("…" if len(brief) > 2000 else ""))
-    print("\n" + "=" * 60)
-    print("本地阵容 RAG 命中（与下方送入模型的条目一致）")
-    print("=" * 60)
-    if args.no_rag:
-        print("（已跳过：使用了 --no-rag，未检索 jsonl）")
-    elif not rag_meta:
-        print("（无命中或 RAG 库为空）")
-    else:
-        for m in rag_meta:
-            print(
-                f"lineup_id={m.get('lineup_id', '')} | "
-                f"评级={m.get('quality', '')} | "
-                f"赛季={m.get('season', '')} | "
-                f"匹配分≈{m.get('match_score', 0)} | "
-                f"阵容名：{m.get('name', '')}"
-            )
-    print("=" * 60)
-
-    print("\n正在请求 LLM…\n")
-    t_ll0 = time.perf_counter()
-    answer = call_gemini_coach(brief, rag_block, question)
-    t_ll1 = time.perf_counter()
-
-    print("\n【教练回答】\n")
-    print(answer)
-    print()
-    print("[gemini_v1] 本回合步骤耗时")
-    if args.no_rag:
-        print(f"  读 JSON + 构建快报（无 RAG）: {t_prep1 - t_prep0:.2f}s")
-    else:
-        print(f"  读 JSON + 构建快报 + RAG: {t_prep1 - t_prep0:.2f}s")
-    print(f"  LLM: {t_ll1 - t_ll0:.2f}s")
-    print()
+    run_coach_after_summary(args, summary_path, question, io_lock)
 
 
 if __name__ == "__main__":

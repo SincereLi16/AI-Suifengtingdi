@@ -4,7 +4,7 @@ pipeline：单链路对局分析（与当前子模块选型一致）。
 
 流程：
 1. 主图 / 辅图：按 stem 后缀（如 -a 为主图）区分；
-2. 主图：fightboard_mobilenet（棋子 MobileNet + 血条下装备）+ player_onnx 全 ROI + equip_column 全量，输出 JSON 结构；
+2. 主图：fightboard_mobilenet（棋子 MobileNet + 血条下装备 + 星级）+ player_onnx 全 ROI + equip_column 全量，输出 JSON 结构；
 3. 辅图：player_onnx 仅羁绊栏（bonds_only），合并进同组主图的 player JSON；
 4. trait_cross_validate：用合并后的羁绊与棋盘结果校验/校准棋子；
 5. 仅主图输出 PNG + JSON：左侧为**原始截图**（不在画面上叠字/框），右侧为汇总面板。
@@ -41,6 +41,7 @@ import cv2
 import numpy as np
 
 import fightboard_mobilenet as fm
+import star_recog as sr
 import player_onnx as pon
 import trait_cross_validate as tcv
 from element_recog import bars_recog as br
@@ -182,8 +183,27 @@ def _format_board_position(pos_obj: Any) -> str:
     return "?"
 
 
+def _star_line_prefix(row: Optional[Dict[str, Any]]) -> str:
+    """血条星级（与 fightboard results[].star 一致）；无识别时不写前缀。"""
+    if not isinstance(row, dict):
+        return ""
+    st = row.get("star")
+    if not isinstance(st, dict):
+        return ""
+    pr = st.get("pred")
+    if pr is None:
+        return ""
+    try:
+        n = int(pr)
+    except (TypeError, ValueError):
+        return ""
+    if n < 1 or n > 3:
+        return ""
+    return f"{n}星 "
+
+
 def _fightboard_pipe_lines(fight_json: Optional[Dict[str, Any]]) -> List[str]:
-    """棋盘：棋子名称 | 位置 | 所携带装备（results + equip_by_bar 来自同一 summary）"""
+    """棋盘：可选「N星」前缀 + 棋子名称 | 位置 | 所携带装备（results + equip_by_bar 来自同一 summary）"""
     lines: List[str] = []
     fj = fight_json or {}
     fr = fj.get("results") or []
@@ -192,11 +212,13 @@ def _fightboard_pipe_lines(fight_json: Optional[Dict[str, Any]]) -> List[str]:
         lines.append("(无棋子)")
         return lines
     for r in fr:
-        bi = int((r or {}).get("bar_index") or 0)
-        name = str((r or {}).get("best") or "?")
-        if str((r or {}).get("confidence") or "") == "low":
+        row = r if isinstance(r, dict) else {}
+        bi = int(row.get("bar_index") or 0)
+        sp = _star_line_prefix(row)
+        name = str(row.get("best") or "?")
+        if str(row.get("confidence") or "") == "low":
             name = f"{name}?"
-        pos = _format_board_position((r or {}).get("position"))
+        pos = _format_board_position(row.get("position"))
         eq_list = equip_by_bar.get(str(bi)) if isinstance(equip_by_bar, dict) else None
         if eq_list is None and isinstance(equip_by_bar, dict):
             eq_list = equip_by_bar.get(bi)
@@ -208,7 +230,7 @@ def _fightboard_pipe_lines(fight_json: Optional[Dict[str, Any]]) -> List[str]:
                     if en:
                         equip_names.append(en)
         eq_str = "、".join(equip_names) if equip_names else "无"
-        lines.append(f"{name} | {pos} | {eq_str}")
+        lines.append(f"{sp}{name} | {pos} | {eq_str}")
     return lines
 
 
@@ -311,6 +333,9 @@ def _slim_fight_result_row(r: Dict[str, Any]) -> Dict[str, Any]:
     vt = out.get("vote_top")
     if isinstance(vt, list):
         out["vote_top"] = vt[:3]
+    st = out.get("star")
+    if isinstance(st, dict) and "dbg" in st:
+        out["star"] = {k: v for k, v in st.items() if k != "dbg"}
     return out
 
 
@@ -474,7 +499,8 @@ def _run_fightboard_mobilenet_one(
     tag: str,
 ) -> Dict[str, Any]:
     """
-    fightboard_mobilenet 单图：chess + 血条下装备，返回与 TCV 兼容的 summary（含 results、equip_by_bar）。
+    fightboard_mobilenet 单图：chess + 血条下装备 + 星级（与 fightboard 脚本同套 star_recog 内联逻辑），
+    返回与 TCV 兼容的 summary（含 results、equip_by_bar、star_recog）。
     """
     t0 = time.perf_counter()
     scene_bgr = cr._load_image(image_path)
@@ -533,7 +559,24 @@ def _run_fightboard_mobilenet_one(
             f"  [{tag}] fightboard 装备 bar{i + 1}/{len(results)} idx={bi} n={len(eq_list)} "
             f"{time.perf_counter() - t_b0:.4f}s"
         )
-    print(f"  [{tag}] fightboard 装备小计: {time.perf_counter() - t_eq0:.4f}s")
+    t_eq1 = time.perf_counter()
+    print(f"  [{tag}] fightboard 装备小计: {t_eq1 - t_eq0:.4f}s")
+
+    star_elapsed, star_meta = fm.attach_star_predictions_to_results(
+        scene_bgr,
+        results,
+        star_enabled=True,
+        template_dir=None,
+        scale_min=float(sr.DEFAULT_SCALE_MIN),
+        scale_max=float(sr.DEFAULT_SCALE_MAX),
+        scale_steps=int(sr.DEFAULT_SCALE_STEPS),
+        roi_side=int(sr.DEFAULT_STAR_ROI_SIDE),
+        shift_right=int(sr.DEFAULT_STAR_SHIFT_RIGHT),
+        preprocess="clahe",
+        ambiguity_margin=0.12,
+        upgrade_min_score=0.0,
+    )
+    print(f"  [{tag}] fightboard 星级小计: {star_elapsed:.4f}s")
 
     summary: Dict[str, Any] = {
         "file": image_path.name,
@@ -541,6 +584,11 @@ def _run_fightboard_mobilenet_one(
         "chess_backend": "mobilenet_v3_small",
         "results": results,
         "equip_by_bar": equip_by_bar,
+        "star_recog": star_meta,
+        "timings_s": {
+            "equip_detect_all_bars": float(t_eq1 - t_eq0),
+            "star_detect_all_bars": float(star_elapsed),
+        },
     }
     return summary
 
@@ -978,13 +1026,15 @@ def main() -> None:
         conf_raw = cv.get("confirmed_results") or fight_js.get("results") or []
         conf_slim = [_slim_fight_result_row(x) if isinstance(x, dict) else x for x in (conf_raw if isinstance(conf_raw, list) else [])]
 
+        slim_fb = _slim_fightboard_module(fight_js)
         merged_json: Dict[str, Any] = {
             "pipeline": "pipeline",
             "file": str(fight_js.get("file") or f"{stem}.png"),
             "group": gk,
             "annotated_image": out_png.name,
+            "star_recog": fight_js.get("star_recog"),
             "modules": {
-                "fightboard": _slim_fightboard_module(fight_js),
+                "fightboard": slim_fb,
                 "player": player_main,
                 "equip_column": eq_col,
             },

@@ -124,7 +124,7 @@ def _build_s17_vision_system_prompt(trait_names: List[str]) -> str:
 - streak: 只允许 "win" / "lose" / null（看不出就 null）。
 - chess: 只包含当前已经「上阵」在棋盘上的棋子信息，不包含备战席。
 - chess[].name: 英雄名称；必须与当前 traits 一致（见下方「交叉校验」）。
-- chess[].star / is_chosen / position: 同上，看不清可填 null。
+- chess[].is_chosen / position: 同上，看不清可填 null。
 
 【Chess 与 Traits 交叉校验】（输出前必须执行）：
 你拥有 S17 赛季英雄与羁绊的对应关系知识。输出前请自检：
@@ -155,7 +155,6 @@ def _build_s17_vision_system_prompt(trait_names: List[str]) -> str:
   "chess": [
     {{
       "name": "英雄名称",
-      "star": 1,
       "is_chosen": false,
       "position": [0, 0]
     }}
@@ -232,11 +231,6 @@ def _sanitize_s17_state(state: Dict[str, Any], trait_names: List[str]) -> Dict[s
                 name = name.strip() or None
             else:
                 name = None
-            star_raw = c.get("star")
-            try:
-                star = int(star_raw) if star_raw is not None else None
-            except (TypeError, ValueError):
-                star = None
             is_chosen = c.get("is_chosen")
             if not isinstance(is_chosen, bool):
                 is_chosen = None
@@ -252,7 +246,6 @@ def _sanitize_s17_state(state: Dict[str, Any], trait_names: List[str]) -> Dict[s
             chess_out.append(
                 {
                     "name": name,
-                    "star": star,
                     "is_chosen": is_chosen,
                     "position": position,
                 }

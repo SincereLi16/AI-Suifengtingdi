@@ -12,7 +12,7 @@ def repo_root() -> Path:
 
 def prepend() -> None:
     base = repo_root()
-    for p in (base, base / "scripts" / "core", base / "scripts" / "extra"):
+    for p in (base, base / "scripts", base / "scripts" / "core", base / "scripts" / "extra"):
         s = str(p.resolve())
         if s not in sys.path:
             sys.path.insert(0, s)

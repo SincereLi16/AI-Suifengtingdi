@@ -9,6 +9,8 @@ fightboard_mobilenet：棋子识别（torchvision MobileNetV3-Small 特征检索
 偏移与光照仍会扰动单点特征，投票可压噪。若以后改为「全监督分类 + 数据对齐」，可再评估减采样点。
 
 输出：每张图 ``{stem}_fightboard_综合标注.png``；默认同时写出 ``{stem}_fightboard_summary.json``（``--no-json`` 可关闭）。
+每条血条结果含 **星级**（``star_recog``：与 export 一致的 ROI 裁剪 + 多尺度模板匹配 + D 让步，内联于本链路，非子进程调用）。
+
 默认仅处理**主图**（stem 以 ``-a`` / ``_a`` 结尾，或纯数字）；``--all-images`` 处理目录内全部图。
 默认**运行前清空** ``--out`` 目录（与旧版一致）；若需保留已有文件，加 ``--no-clear-out``。
 默认输出目录 ``runs/fightboard_info_v2``。
@@ -71,6 +73,8 @@ from element_recog.chess_recog import ROI as CR_ROI
 from element_recog.chess_recog import _prepare_piece_db_matrix, _topk_cosine
 
 from project_paths import DEFAULT_OUT_FIGHTBOARD_V2, PROJECT_ROOT
+
+import star_recog as sr
 
 PROJECT_DIR = PROJECT_ROOT
 DEFAULT_INPUT = PROJECT_DIR / "对局截图"
@@ -895,25 +899,24 @@ def run_recognition_chess(
                         _revert_bar_sketch()
                         continue
 
-        results.append(
-            {
-                "bar_index": bi + 1,
-                "bar_box": [int(x), int(y), int(w), int(h)],
-                "stage": stage,
-                "best": best,
-                "best_score": best_score,
-                "second_score": second_score,
-                "gap": gap,
-                "used_samples": used_samples,
-                "vote_top": sorted(
-                    [{"name": k, "votes": int(v)} for k, v in votes.items()], key=lambda x: -x["votes"]
-                )[:10],
-                "agg_top": [{"name": n, "score": float(s)} for (n, s) in agg_sorted],
-                "samples": per_samples,
-                "stage2": stage2_detail,
-                "confidence": _compute_confidence(stage, used_samples, float(best_score), stage2_detail),
-            }
-        )
+        rec: Dict[str, Any] = {
+            "bar_index": bi + 1,
+            "bar_box": [int(x), int(y), int(w), int(h)],
+            "stage": stage,
+            "best": best,
+            "best_score": best_score,
+            "second_score": second_score,
+            "gap": gap,
+            "used_samples": used_samples,
+            "vote_top": sorted(
+                [{"name": k, "votes": int(v)} for k, v in votes.items()], key=lambda x: -x["votes"]
+            )[:10],
+            "agg_top": [{"name": n, "score": float(s)} for (n, s) in agg_sorted],
+            "samples": per_samples,
+            "stage2": stage2_detail,
+            "confidence": _compute_confidence(stage, used_samples, float(best_score), stage2_detail),
+        }
+        results.append(rec)
 
         _confidence = _compute_confidence(stage, used_samples, float(best_score), stage2_detail)
         if best:
@@ -1131,7 +1134,12 @@ def _overlay_fightboard(
         if isinstance(pos_obj, dict):
             pos = pos_obj.get("label") or "?"
 
-        line1 = f"{piece_label} {pos}".strip()
+        star_obj = r.get("star")
+        star_prefix = ""
+        if isinstance(star_obj, dict) and star_obj.get("pred") is not None:
+            star_prefix = f"{int(star_obj['pred'])}星 "
+
+        line1 = f"{star_prefix}{piece_label} {pos}".strip()
         tx, ty = x, max(0, y - (int(font_size) + 8))
         cr._draw_chinese_text(
             vis,
@@ -1167,6 +1175,17 @@ def _overlay_fightboard(
                     (int(text_x), int(text_y)),
                     font_size=max(10, int(font_size) - 2),
                     color=(255, 255, 0),
+                )
+        if isinstance(star_obj, dict):
+            rect = star_obj.get("star_roi_rect_xywh")
+            if isinstance(rect, (list, tuple)) and len(rect) >= 4:
+                ix1, iy1, rw, rh = (int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]))
+                cv2.rectangle(
+                    vis,
+                    (ix1, iy1),
+                    (min(vis.shape[1] - 1, ix1 + max(0, rw - 1)), min(vis.shape[0] - 1, iy1 + max(0, rh - 1))),
+                    (0, 180, 255),
+                    1,
                 )
         cv2.rectangle(vis, (x, y), (x + w, y + h), (255, 0, 0), 1)
     return vis
@@ -1216,6 +1235,97 @@ def _get_worker_equip_templates(equip_gallery_dir: Path) -> List[Tuple[str, Any]
         raise RuntimeError(f"equip-gallery 无可用图片: {equip_gallery_dir}")
     _WORKER_CACHE[key] = templates
     return templates
+
+
+def _get_worker_star_recog_bundle(
+    template_dir: Optional[str],
+    scale_min: float,
+    scale_max: float,
+    scale_steps: int,
+) -> Optional[Tuple[Dict[int, np.ndarray], Tuple[float, ...], str]]:
+    key = f"star|{template_dir or ''}|{scale_min}|{scale_max}|{scale_steps}"
+    hit = _WORKER_CACHE.get(key)
+    if hit is not None:
+        return hit
+    bundle: Optional[Tuple[Dict[int, np.ndarray], Tuple[float, ...], str]]
+    try:
+        td_path = Path(str(template_dir)).resolve() if template_dir else None
+        tdir = sr.resolve_template_dir(td_path)
+        templates = sr.load_templates_bgr(tdir)
+        ratios = sr.build_scale_ratios(float(scale_min), float(scale_max), int(scale_steps))
+        bundle = (templates, ratios, str(tdir))
+    except (FileNotFoundError, OSError, ValueError):
+        bundle = None
+    _WORKER_CACHE[key] = bundle
+    return bundle
+
+
+def attach_star_predictions_to_results(
+    scene_bgr: np.ndarray,
+    results: List[Dict[str, Any]],
+    *,
+    star_enabled: bool,
+    template_dir: Optional[str],
+    scale_min: float,
+    scale_max: float,
+    scale_steps: int,
+    roi_side: int,
+    shift_right: int,
+    preprocess: str,
+    ambiguity_margin: float,
+    upgrade_min_score: float,
+) -> Tuple[float, Dict[str, Any]]:
+    """就地写入每条 ``results[i]['star']``；返回 (耗时秒, 写入 summary 的 meta)。"""
+    meta: Dict[str, Any] = {"enabled": bool(star_enabled)}
+    if not star_enabled:
+        for r in results:
+            r["star"] = None
+        meta["skipped_reason"] = "disabled"
+        return 0.0, meta
+
+    t0 = time.perf_counter()
+    bundle = _get_worker_star_recog_bundle(
+        template_dir,
+        float(scale_min),
+        float(scale_max),
+        int(scale_steps),
+    )
+    if bundle is None:
+        for r in results:
+            r["star"] = None
+        meta["skipped_reason"] = "template_load_failed_or_missing"
+        meta["elapsed_s"] = time.perf_counter() - t0
+        return float(meta["elapsed_s"]), meta
+
+    templates, ratios, tdir_str = bundle
+    meta["template_dir"] = tdir_str
+    meta["scale_ratios"] = list(ratios)
+    meta["roi_side"] = int(roi_side)
+    meta["shift_right"] = int(shift_right)
+    meta["preprocess"] = str(preprocess)
+    meta["ambiguity_margin"] = float(ambiguity_margin)
+    meta["upgrade_min_score"] = float(upgrade_min_score)
+
+    for r in results:
+        bb = r.get("bar_box")
+        if not bb or len(bb) < 4:
+            r["star"] = None
+            continue
+        st = sr.recognize_star_for_bar_box(
+            scene_bgr,
+            bb,
+            templates,
+            scale_ratios=ratios,
+            side=int(roi_side),
+            shift_right=int(shift_right),
+            preprocess=str(preprocess),
+            margin=float(ambiguity_margin),
+            min_score_for_upgrade=float(upgrade_min_score),
+        )
+        r["star"] = st
+
+    meta["elapsed_s"] = time.perf_counter() - t0
+    return float(meta["elapsed_s"]), meta
 
 
 def _process_one_image_job(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1322,6 +1432,21 @@ def _process_one_image_job(payload: Dict[str, Any]) -> Dict[str, Any]:
                 equip_by_bar[bi] = out
     t_equip_done = time.perf_counter()
 
+    star_elapsed, star_meta = attach_star_predictions_to_results(
+        scene_bgr,
+        results,
+        star_enabled=bool(payload.get("star_enable", True)),
+        template_dir=payload.get("star_template_dir"),
+        scale_min=float(payload["star_scale_min"]),
+        scale_max=float(payload["star_scale_max"]),
+        scale_steps=int(payload["star_scale_steps"]),
+        roi_side=int(payload["star_roi_side"]),
+        shift_right=int(payload["star_shift_right"]),
+        preprocess=str(payload["star_preprocess"]),
+        ambiguity_margin=float(payload["star_ambiguity_margin"]),
+        upgrade_min_score=float(payload["star_upgrade_min_score"]),
+    )
+
     t_vis0 = time.perf_counter()
     vis = _overlay_fightboard(
         scene_bgr=scene_bgr,
@@ -1351,9 +1476,11 @@ def _process_one_image_job(payload: Dict[str, Any]) -> Dict[str, Any]:
             "timings_s": {
                 **dict(chess_timings),
                 "equip_detect_all_bars": float(t_equip_done - t_equip0),
+                "star_detect_all_bars": float(star_elapsed),
                 "overlay_composite": float(t_overlay),
                 "save_annotated_png": float(t_save_img),
             },
+            "star_recog": star_meta,
             "results": results,
             "equip_by_bar": equip_by_bar,
         }
@@ -1503,6 +1630,44 @@ def main() -> None:
     ap.add_argument("--equip-workers", type=int, default=1, help="每张图内装备识别并行线程数（默认1）")
     ap.add_argument("--label-font-size", type=int, default=16)
     ap.add_argument(
+        "--no-star",
+        dest="star_enable",
+        action="store_false",
+        help="关闭血条旁星级识别（多尺度模板 + D 让步，与 star_recog 默认一致）",
+    )
+    ap.set_defaults(star_enable=True)
+    ap.add_argument(
+        "--star-template-dir",
+        type=Path,
+        default=None,
+        help="星级模板目录（默认项目根「星级模板」/ star_templates）",
+    )
+    ap.add_argument("--star-roi-side", type=int, default=sr.DEFAULT_STAR_ROI_SIDE, help="星级裁剪正方形边长")
+    ap.add_argument(
+        "--star-shift-right",
+        type=int,
+        default=sr.DEFAULT_STAR_SHIFT_RIGHT,
+        help="星级 ROI 中心相对血条左缘右移像素",
+    )
+    ap.add_argument("--star-scale-min", type=float, default=sr.DEFAULT_SCALE_MIN)
+    ap.add_argument("--star-scale-max", type=float, default=sr.DEFAULT_SCALE_MAX)
+    ap.add_argument("--star-scale-steps", type=int, default=sr.DEFAULT_SCALE_STEPS)
+    ap.add_argument(
+        "--star-preprocess",
+        type=str,
+        default="clahe",
+        choices=("none", "clahe", "eq"),
+        help="星级匹配前灰度预处理",
+    )
+    ap.add_argument("--star-ambiguity-margin", type=float, default=0.12, metavar="D", help="星级 D 让步")
+    ap.add_argument(
+        "--star-upgrade-min-score",
+        type=float,
+        default=0.0,
+        metavar="T",
+        help="星级让步时被升上的类分须≥T",
+    )
+    ap.add_argument(
         "--no-json",
         action="store_true",
         help="不写出 *_fightboard_summary.json（默认每张主图都会写，供 trait_cross_validate 使用）",
@@ -1638,6 +1803,20 @@ def main() -> None:
                 "prefer_rocm": bool(args.prefer_rocm),
                 "torch_auto_priority": str(args.torch_auto_priority),
                 "torch_fallback_to_cpu": bool(args.torch_fallback_to_cpu),
+                "star_enable": bool(args.star_enable),
+                "star_template_dir": (
+                    str(args.star_template_dir.resolve())
+                    if args.star_template_dir is not None
+                    else None
+                ),
+                "star_roi_side": int(args.star_roi_side),
+                "star_shift_right": int(args.star_shift_right),
+                "star_scale_min": float(args.star_scale_min),
+                "star_scale_max": float(args.star_scale_max),
+                "star_scale_steps": int(args.star_scale_steps),
+                "star_preprocess": str(args.star_preprocess),
+                "star_ambiguity_margin": float(args.star_ambiguity_margin),
+                "star_upgrade_min_score": float(args.star_upgrade_min_score),
             }
         )
 
