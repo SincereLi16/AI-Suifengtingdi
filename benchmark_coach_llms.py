@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-多模型教练对比：战术快报 + 本地 RAG 与 gemini_v1 一致，经 OpenRouter 调用各模型，
-对固定 4 个问题分别计时并打印回答。
+多模型教练对比：战术快报 + 本地 RAG 与 gemini_v1 一致（system prompt 即 gv._coach_system_prompt()），
+经 OpenRouter 调用各模型，对固定问题分别计时并打印回答。
 
 用法（仓库根目录）：
   python benchmark_coach_llms.py
   python benchmark_coach_llms.py --summary-json runs/battle_pipeline_v3_out/01-a_summary.json
-  python benchmark_coach_llms.py --models "google/gemini-2.5-flash-lite,openai/gpt-4o-mini"
+  python benchmark_coach_llms.py --models "google/gemini-2.5-flash,anthropic/claude-haiku-4.5"
 
 依赖：.env 中 OPENROUTER_API_KEY；可选 data/rag_lineup_lineup.jsonl、data/rag_core_chess.jsonl。
 
@@ -34,34 +34,33 @@ DEFAULT_SUMMARY_DIR = REPO_ROOT / "runs" / "battle_pipeline_v3_out"
 
 # (展示名, OpenRouter model id) —— id 以 OpenRouter 控制台为准，可随时改 DEFAULT_MODEL_ROWS
 DEFAULT_MODEL_ROWS: List[Tuple[str, str]] = [
-    ("Gemini 2.5 Flash Lite", "google/gemini-2.5-flash-lite"),
-    ("Qwen Turbo", "qwen/qwen-turbo"),
-    ("Llama 3.2 3B Instruct", "meta-llama/llama-3.2-3b-instruct"),
-    ("GPT-4o mini", "openai/gpt-4o-mini"),
-    ("Grok 4 Fast", "x-ai/grok-4-fast"),
+    ("Gemini 2.5 Flash", "google/gemini-2.5-flash"),
+    ("Claude 4 Haiku", "anthropic/claude-haiku-4.5"),
+    ("Llama 3.3 70B Instruct", "meta-llama/llama-3.3-70b-instruct"),
+    ("Llama 4 Scout (Lightweight)", "meta-llama/llama-4-scout"),
+    ("Qwen2.5 Coder 32B Instruct", "qwen/qwen-2.5-coder-32b-instruct"),
 ]
 
 DEFAULT_QUESTIONS = [
-    "玩什么阵容",
-    "给什么装备",
-    "主C是谁，主坦是谁",
-    "接下来该怎么办？",
+    "这把玩什么?",
+    "装备怎么给？",
+    "站位如何调整",
 ]
 
 
 def _build_user_block(
     brief: str, rag_lineup: str, rag_chess: str, question: str
 ) -> str:
-    return (
-        "【哈基星问题】\n"
-        f"{question.strip()}\n\n"
-        "【战术快报】\n"
-        f"{brief.strip()}\n\n"
-        "【阵容智库 (RAG)】\n"
-        f"{rag_lineup.strip()}\n\n"
-        "【棋子智库 (RAG)】\n"
-        f"{rag_chess.strip()}"
-    )
+    """与 gemini_v1._coach_first_user_message 一致：对局情报 + 阵容攻略附录，不重复棋子智库全文。"""
+    _ = rag_chess
+    parts = [
+        "【哈基星问题】\n" + question.strip(),
+        "【对局情报】\n" + brief.strip(),
+    ]
+    rl = (rag_lineup or "").strip()
+    if rl and not rl.startswith("（本回合未注入"):
+        parts.append("【阵容攻略原文（附录）】\n" + rl)
+    return "\n\n".join(parts)
 
 
 def _build_rag_blocks(
@@ -78,16 +77,20 @@ def _build_rag_blocks(
         t = str(rag_min_quality).strip().upper()
         c = t[0] if t else ""
         min_q = c if c in gv._LINEUP_QUALITY_ORDER else None
-    lineup_block, _, _ = gv.retrieve_lineup_rag(
+    lineup_block, _, _, lineup_docs = gv.retrieve_lineup_rag(
         summary,
         rag_lineup,
         top_k=max(1, rag_top_k),
         min_quality=min_q,
     )
+    lineup_top1 = lineup_docs[0] if lineup_docs else None
     core_block, _, _ = gv.retrieve_core_chess_rag(
         summary,
         rag_core.resolve(),
         top_k=max(1, rag_chess_top_k),
+        lineup_top_doc=lineup_top1,
+        legend_chess_path=gv.DEFAULT_RAG_LEGEND_CHESS,
+        summary_json_path=None,
     )
     return lineup_block, core_block
 
@@ -127,7 +130,7 @@ def main() -> None:
         "--models",
         type=str,
         default="",
-        help="逗号分隔的 OpenRouter model id，覆盖默认 5 个；无展示名时 id 即展示名",
+        help="逗号分隔的 OpenRouter model id，覆盖默认列表；无展示名时 id 即展示名",
     )
     ap.add_argument("--temperature", type=float, default=0.35)
     ap.add_argument("--timeout", type=float, default=120.0)
@@ -143,7 +146,7 @@ def main() -> None:
         raise SystemExit(f"找不到 summary: {sp}")
 
     summary = json.loads(sp.read_text(encoding="utf-8"))
-    brief = gv.build_tactical_brief(summary)
+    brief = gv.build_tactical_brief(summary, summary_json_path=sp)
     mq = args.rag_min_quality if str(args.rag_min_quality).strip() else None
     lineup_rag, chess_rag = _build_rag_blocks(
         summary,
@@ -208,7 +211,7 @@ def main() -> None:
             else:
                 print(answer)
 
-        print(f"\n>> {label} 四问合计: {model_total:.2f}s")
+        print(f"\n>> {label} 本批问题合计: {model_total:.2f}s")
 
     if args.json_out:
         out_path = args.json_out.resolve()

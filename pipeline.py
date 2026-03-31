@@ -562,11 +562,17 @@ def _run_fightboard_mobilenet_one(
     t_eq1 = time.perf_counter()
     print(f"  [{tag}] fightboard 装备小计: {t_eq1 - t_eq0:.4f}s")
 
+    # 显式指向项目根「星级模板」或 star_templates，避免 template_dir=None 时静默失败导致 JSON 无 star
+    _star_td = PROJECT_DIR / "星级模板"
+    if not _star_td.is_dir():
+        _star_td = PROJECT_DIR / "star_templates"
+    star_template_dir = str(_star_td.resolve()) if _star_td.is_dir() else None
+
     star_elapsed, star_meta = fm.attach_star_predictions_to_results(
         scene_bgr,
         results,
         star_enabled=True,
-        template_dir=None,
+        template_dir=star_template_dir,
         scale_min=float(sr.DEFAULT_SCALE_MIN),
         scale_max=float(sr.DEFAULT_SCALE_MAX),
         scale_steps=int(sr.DEFAULT_SCALE_STEPS),

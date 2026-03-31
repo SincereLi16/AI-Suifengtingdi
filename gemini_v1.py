@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Pipeline 对局 JSON → 战术快报（含棋盘棋子星级）→ 阵容智库 RAG + 棋子智库 RAG → 随风听笛回答。
+Pipeline 对局 JSON → 战术快报（含目标棋子详情）→ 阵容攻略附录 RAG → 随风听笛回答。
 
 用法示例：
   python gemini_v1.py
@@ -15,12 +15,15 @@ Pipeline 对局 JSON → 战术快报（含棋盘棋子星级）→ 阵容智库
 说明：
   - 当前 LLM：默认 OpenRouter，模型 id 见 .env 的 OPENROUTER_TEXT_MODEL（如 google/gemini-2.5-flash，即 Gemini Flash 系）。
   - GEMINI_BACKEND=google 可走 Google 直连；模型见 GEMINI_MODEL。
+  - 棋盘装备：审计见 scripts/extra/equip_audit.py，推荐见 scripts/extra/equip_recom.py。
+  - 棋子智库结构化块：scripts/chess_recom.py（Top1 缺口、挂件替换等）。
 """
 from __future__ import annotations
 
 import argparse
 import itertools
 import json
+from collections import Counter
 import os
 import re
 import subprocess
@@ -29,9 +32,20 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+from scripts.chess_recom import (
+    board_line_hero_display_name,
+    load_core_chess_list,
+    load_legend_chess_name_map,
+    lookup_core_chess_row,
+    retrieve_core_chess_rag,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent
+
+# rag_legend_equip.jsonl：基础装集合 + 合成配方（散件计数 → 可合成成装）
+_LEGEND_EQUIP_TABLES: Optional[Tuple[Set[str], List[Tuple[str, str, str]]]] = None
 
 
 def _load_repo_dotenv() -> None:
@@ -81,12 +95,22 @@ _load_repo_dotenv()
 warnings.filterwarnings("ignore", message=r"(?s).*doesn't match a supported version.*")
 
 import requests  # noqa: E402
+
+from scripts.extra.equip_audit import (  # noqa: E402
+    format_equipment_audit_terminal_lines,
+    load_legend_equip_full_map,
+    traits_to_role_tags,
+)
+from scripts.extra.equip_recom import pick_next_finished_recommendations  # noqa: E402
+
 # 与 pipeline 默认输出一致；若目录内已有 *_summary.json，gemini_v1 优先读缓存、不重复跑识别
 PIPELINE_CACHE_DIR = REPO_ROOT / "runs" / "battle_pipeline_v3_out"
 DEFAULT_PIPELINE_OUT = PIPELINE_CACHE_DIR
 DEFAULT_IMG_DIR = REPO_ROOT / "对局截图"
 DEFAULT_RAG_LINEUP = REPO_ROOT / "data" / "rag_lineup_lineup.jsonl"
 DEFAULT_RAG_CORE_CHESS = REPO_ROOT / "data" / "rag_core_chess.jsonl"
+DEFAULT_RAG_LEGEND_CHESS = REPO_ROOT / "data" / "rag_legend_chess.jsonl"
+
 # 阵容攻略 quality：字母越靠前越强（与掌盟评级一致）
 _LINEUP_QUALITY_ORDER = "SABCDEFGH"
 
@@ -308,71 +332,326 @@ def _field_parsed(player: Dict[str, Any], key: str) -> str:
     return ""
 
 
-def _star_part_from_row(r: Dict[str, Any]) -> str:
-    """棋子星级（fightboard / pipeline confirmed 行内的 star.pred）。"""
-    st = r.get("star")
+def _star_level_from_star_obj(st: Any) -> Optional[int]:
+    """从 fightboard 的 star 字典解析 1～3 星；pred / pred_raw、int/float/str 均兼容。"""
     if not isinstance(st, dict):
-        return ""
-    pr = st.get("pred")
-    try:
-        n = int(pr)
-    except (TypeError, ValueError):
-        return ""
-    if 1 <= n <= 3:
-        return f" {n}星"
-    return ""
+        return None
+    for key in ("pred", "pred_raw"):
+        pr = st.get(key)
+        if pr is None:
+            continue
+        try:
+            n = int(float(pr))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 3:
+            return n
+    return None
 
 
-def _board_line_hero_display_name(r: Dict[str, Any]) -> str:
-    """单格棋子展示名：与战报「棋盘与装备」一致（数据源为 TCV 写入的 confirmed_fightboard_results 每行 best；低置信度加 ?）。"""
-    if not isinstance(r, dict):
-        return "?"
-    name = str(r.get("best") or "?")
-    conf = str(r.get("confidence") or "")
-    if conf == "low":
-        name = f"{name}?"
-    return name
+def _fightboard_star_index_from_results(rs: Any) -> Dict[int, Dict[str, Any]]:
+    """fightboard results 列表 → bar_index → star 字典（仅含 isinstance(star, dict) 的项）。"""
+    out: Dict[int, Dict[str, Any]] = {}
+    if not isinstance(rs, list):
+        return out
+    for r in rs:
+        if not isinstance(r, dict):
+            continue
+        try:
+            bi = int(r.get("bar_index") or -1)
+        except (TypeError, ValueError):
+            continue
+        st = r.get("star")
+        if bi >= 0 and isinstance(st, dict):
+            out[bi] = st
+    return out
 
 
-def _tcv_board_hero_names_for_rag(summary: Dict[str, Any]) -> List[str]:
+def _load_fightboard_sidecar_star_index(
+    summary: Dict[str, Any],
+    summary_json_path: Optional[Path] = None,
+) -> Dict[int, Dict[str, Any]]:
     """
-    仅用于棋子智库：与战术快报棋盘行同源的棋子名列表（去重保序）。
-    匹配 jsonl 时去掉展示用尾随 ?，不包含羁绊栏关键词。
+    读取同主图 stem 的 *_fightboard_summary.json（单独跑 fightboard_mobilenet 时的输出），
+    用于 pipeline 缓存的 *_summary.json 未写入 star 时的星级回退。
+
+    查找顺序：与 summary_json 同目录的 {stem}_fightboard_summary.json → runs/fightboard_info_v2/。
     """
-    rows = summary.get("confirmed_fightboard_results")
-    if not isinstance(rows, list):
-        return []
+    fn = str(summary.get("file") or "").strip()
+    if not fn:
+        return {}
+    stem = Path(fn).stem
+    name = f"{stem}_fightboard_summary.json"
+    candidates: List[Path] = []
+    if summary_json_path is not None:
+        candidates.append(summary_json_path.resolve().parent / name)
+    candidates.append(REPO_ROOT / "runs" / "fightboard_info_v2" / name)
+    for p in candidates:
+        if not p.is_file():
+            continue
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        fb = (raw.get("modules") or {}).get("fightboard") or raw
+        return _fightboard_star_index_from_results(fb.get("results"))
+    return {}
+
+
+def _fightboard_star_by_bar(
+    summary: Dict[str, Any],
+    *,
+    summary_json_path: Optional[Path] = None,
+) -> Dict[int, Dict[str, Any]]:
+    """modules.fightboard.results 按 bar_index 建 star 索引；无有效 pred 时尝试同 stem 的 fightboard 侧写 JSON。"""
+    fb = (summary.get("modules") or {}).get("fightboard") or {}
+    out = _fightboard_star_index_from_results(fb.get("results"))
+    side = _load_fightboard_sidecar_star_index(summary, summary_json_path=summary_json_path)
+    for bi, st in side.items():
+        cur = out.get(bi)
+        if _star_level_from_star_obj(cur) is not None:
+            continue
+        if _star_level_from_star_obj(st) is not None:
+            out[bi] = st
+    return out
+
+
+def _star_prefix_board(r: Dict[str, Any], star_by_bar: Dict[int, Dict[str, Any]]) -> str:
+    """棋子星级前缀：优先本行 star，否则同 bar_index 的 fightboard.results[].star。"""
+    st: Any = r.get("star")
+    if not isinstance(st, dict):
+        try:
+            bi = int(r.get("bar_index") or -1)
+        except (TypeError, ValueError):
+            bi = -1
+        if bi >= 0:
+            st = star_by_bar.get(bi)
+    n = _star_level_from_star_obj(st)
+    if n is None:
+        return ""
+    return f"{n}星 "
+
+
+def _star_display_segment(r: Dict[str, Any], star_by_bar: Dict[int, Dict[str, Any]]) -> str:
+    """单行战报用星级片段：如 2星；无识别为 ?星。"""
+    st: Any = r.get("star")
+    if not isinstance(st, dict):
+        try:
+            bi = int(r.get("bar_index") or -1)
+        except (TypeError, ValueError):
+            bi = -1
+        if bi >= 0:
+            st = star_by_bar.get(bi)
+    n = _star_level_from_star_obj(st)
+    if n is not None:
+        return f"{n}星"
+    return "?星"
+
+
+def _all_board_equipped_names(rows: List[Dict[str, Any]], equip_by_bar: Any) -> List[str]:
+    """棋盘上所有格子的已携带成装名（顺序拼接，可重复）。"""
     out: List[str] = []
     for r in rows:
         if not isinstance(r, dict):
             continue
-        disp = _board_line_hero_display_name(r)
-        key = disp.rstrip("?").rstrip("？").strip()
-        if key and key not in ("?", "？"):
-            out.append(key)
-    return list(dict.fromkeys(out))
+        try:
+            bi = int(r.get("bar_index") or 0)
+        except (TypeError, ValueError):
+            bi = 0
+        raw_eq = equip_by_bar.get(str(bi)) if isinstance(equip_by_bar, dict) else None
+        if raw_eq is None and isinstance(equip_by_bar, dict):
+            raw_eq = equip_by_bar.get(bi)
+        if isinstance(raw_eq, list):
+            for e in raw_eq:
+                if isinstance(e, dict):
+                    en = str(e.get("name") or "").strip()
+                    if en:
+                        out.append(en)
+    return out
 
 
-def _format_board_lines(summary: Dict[str, Any]) -> List[str]:
+def _board_slot_role_sort_key(slot_tag: str) -> int:
+    """战报行顺序：主坦 → 主C → 打工仔/混合 → 挂件；其余靠后。"""
+    return {
+        "主坦": 0,
+        "主C": 1,
+        "打工仔": 2,
+        "混合": 2,
+        "挂件": 3,
+    }.get((slot_tag or "").strip(), 99)
+
+
+REPORT_SEP = "————————————————————"
+REPORT_WRAP_WIDTH = 64
+# 战报：节标题 emoji 与文字 2 空格（缓解终端里符号与汉字挤在一起）；竖线分隔两侧各 1 空格
+REPORT_EMOJI_GAP = "  "
+REPORT_PIPE_SEP = " | "
+# 棋盘槽位行：不用 ✅/对勾类，改用几何符号；审计行见 equip_audit（※ 正常等）
+BOARD_EMOJI_TEXT_GAP = "  "
+BOARD_SLOT_ICON_FULL = "◆"
+BOARD_SLOT_ICON_EMPTY = "◇"
+
+
+def _wrap_segments_line(parts: List[str], sep: str = REPORT_PIPE_SEP, width: int = REPORT_WRAP_WIDTH) -> str:
+    """将若干片段用 sep 拼接，超长则换行续写。"""
+    if not parts:
+        return ""
+    lines: List[str] = []
+    cur = parts[0]
+    for p in parts[1:]:
+        trial = f"{cur}{sep}{p}"
+        if len(trial) > width:
+            lines.append(cur)
+            cur = p
+        else:
+            cur = trial
+    lines.append(cur)
+    return "\n".join(lines)
+
+
+def _sort_traits_for_report(trait_count_max: Dict[str, int]) -> List[Tuple[str, int]]:
+    """1～2 人口羁绊优先（先 1 后 2），其余按激活数降序。"""
+    if not trait_count_max:
+        return []
+    items = [(str(t), int(c)) for t, c in trait_count_max.items()]
+    low = [(t, c) for t, c in items if c <= 2]
+    high = [(t, c) for t, c in items if c > 2]
+    low.sort(key=lambda x: (x[1], x[0]))
+    high.sort(key=lambda x: (-x[1], x[0]))
+    return low + high
+
+
+def _format_traits_block(tm: Optional[Dict[str, int]]) -> str:
+    if not tm:
+        return "(无)"
+    ordered = _sort_traits_for_report(tm)
+    parts = [f"{c}{t}" for t, c in ordered]
+    return _wrap_segments_line(parts)
+
+
+def _lineup_display_name_and_traits(full_name: str) -> Tuple[str, str]:
+    """从阵容名解析短名与「3xx|2yy」羁绊串。"""
+    name = (full_name or "").strip()
+    m = re.search(r"【([^】]+)】", name)
+    short = m.group(1).strip() if m else name
+    tail = name.split("】", 1)[-1].strip() if "】" in name else ""
+    if not tail:
+        return short, ""
+    pairs = re.findall(r"(\d+)([^\d]+)", tail)
+    traits = REPORT_PIPE_SEP.join(f"{a}{b.strip()}" for a, b in pairs)
+    return short, traits
+
+
+def _star_int_for_sort(r: Dict[str, Any], star_by_bar: Dict[int, Dict[str, Any]]) -> int:
+    st: Any = r.get("star")
+    if not isinstance(st, dict):
+        try:
+            bi = int(r.get("bar_index") or -1)
+        except (TypeError, ValueError):
+            bi = -1
+        if bi >= 0:
+            st = star_by_bar.get(bi)
+    n = _star_level_from_star_obj(st) if isinstance(st, dict) else None
+    return int(n) if n is not None else -1
+
+
+def _format_board_detail_lines(
+    summary: Dict[str, Any],
+    core_list: List[Dict[str, Any]],
+    *,
+    summary_json_path: Optional[Path] = None,
+    legend_chess_path: Optional[Path] = None,
+) -> List[str]:
+    """战术快报棋盘：竖线分列；挂件不输出推荐；第三行为装备审计（正常|严重|警告）；推荐件数=空位。
+
+    输出顺序按定位：主坦、主C、打工仔、混合、挂件。"""
+    c, w = _build_board_emoji_sections(
+        summary,
+        core_list,
+        summary_json_path=summary_json_path,
+        legend_chess_path=legend_chess_path,
+    )
+    out: List[str] = []
+    for b in c + w:
+        out.extend(b.splitlines())
+    return out
+
+
+def _role_line_label(slot_tag: str) -> str:
+    if slot_tag in ("打工仔", "混合"):
+        return "打工"
+    return slot_tag or "?"
+
+
+def _build_board_emoji_sections(
+    summary: Dict[str, Any],
+    core_list: List[Dict[str, Any]],
+    *,
+    summary_json_path: Optional[Path] = None,
+    legend_chess_path: Optional[Path] = None,
+) -> Tuple[List[str], List[str]]:
+    """主力核心、打工挂件；星级降序、费用降序。"""
     rows = summary.get("confirmed_fightboard_results")
     if not isinstance(rows, list):
-        return []
+        return [], []
     fight = (summary.get("modules") or {}).get("fightboard") or {}
     equip_by_bar = fight.get("equip_by_bar") or {}
-    lines: List[str] = []
-    for r in rows:
+    player_on = (summary.get("modules") or {}).get("player") or {}
+    phase_raw = _field_parsed(player_on, "phase").replace("总", "")
+    team_all_equips = _all_board_equipped_names(rows, equip_by_bar)
+    star_by_bar = _fightboard_star_by_bar(summary, summary_json_path=summary_json_path)
+    leg_path = legend_chess_path or DEFAULT_RAG_LEGEND_CHESS
+    legend_map = load_legend_chess_name_map(leg_path)
+    equip_map = load_legend_equip_full_map()
+    raw: List[Dict[str, Any]] = []
+    for row_idx, r in enumerate(rows):
         if not isinstance(r, dict):
             continue
-        name = _board_line_hero_display_name(r)
+        disp = board_line_hero_display_name(r)
+        lookup_key = disp.rstrip("?").rstrip("？").strip()
+        row_doc = lookup_core_chess_row(lookup_key, core_list)
+        leg_row = legend_map.get(lookup_key) if row_doc is None else None
+        leg_for_audit = legend_map.get(lookup_key) if lookup_key else None
+        legend_text_audit = str((leg_for_audit or {}).get("text") or "") if isinstance(leg_for_audit, dict) else ""
+
+        cost_v: Any = None
+        meta: Dict[str, Any] = {}
+        slot_tag = ""
+        role_tags_list: List[str] = []
+        if isinstance(row_doc, dict):
+            cost_v = row_doc.get("cost")
+            meta = row_doc.get("meta") if isinstance(row_doc.get("meta"), dict) else {}
+            slot_tag = str(meta.get("slot_role") or "").strip()
+            rt = meta.get("role_tags")
+            if isinstance(rt, list):
+                role_tags_list = [str(x).strip() for x in rt if str(x).strip()]
+        elif isinstance(leg_row, dict):
+            cost_v = leg_row.get("cost")
+            traits = leg_row.get("traits")
+            role_tags_list = traits_to_role_tags(traits if isinstance(traits, list) else [])
+            meta = {"slot_role": "挂件", "recommended_equips": []}
+            slot_tag = "挂件"
+
+        try:
+            cost_n = int(cost_v) if cost_v is not None else -1
+        except (TypeError, ValueError):
+            cost_n = -1
+        cost_s = f"{cost_n}费" if cost_n >= 0 else "?费"
+
+        rec_list = meta.get("recommended_equips") if isinstance(meta.get("recommended_equips"), list) else []
+
         pos = r.get("position") or {}
-        loc = ""
+        cell_row: Optional[int] = None
+        loc = "?"
         if isinstance(pos, dict):
-            lab = str(pos.get("label") or "")
             cr, cc = pos.get("cell_row"), pos.get("cell_col")
             if cr is not None and cc is not None:
-                loc = f"({int(cr)},{int(cc)})"  # 行,列
-            elif lab:
-                loc = lab
+                cell_row = int(cr)
+                loc = f"(R{cell_row},C{int(cc)})"
+            else:
+                lab = str(pos.get("label") or "").strip()
+                loc = lab if lab else "?"
+
         bi = int(r.get("bar_index") or 0)
         eqs: List[str] = []
         raw_eq = equip_by_bar.get(str(bi))
@@ -381,14 +660,71 @@ def _format_board_lines(summary: Dict[str, Any]) -> List[str]:
         if isinstance(raw_eq, list):
             for e in raw_eq:
                 if isinstance(e, dict):
-                    n = str(e.get("name") or "").strip()
-                    if n:
-                        eqs.append(n)
-        eq_str = "、".join(eqs) if eqs else "无"
-        loc_s = loc if loc else "?"
-        sx = _star_part_from_row(r)
-        lines.append(f"{name} 站位{loc_s}{sx} | 装备:{eq_str}")
-    return lines
+                    en = str(e.get("name") or "").strip()
+                    if en:
+                        eqs.append(en)
+        carry_label = "、".join(eqs) if eqs else "空"
+        n_eq = len(eqs)
+        star_seg = _star_display_segment(r, star_by_bar)
+        star_n = _star_int_for_sort(r, star_by_bar)
+        role_line = _role_line_label(slot_tag)
+
+        audit_lines = format_equipment_audit_terminal_lines(
+            hero_display_name=disp,
+            role_tags=role_tags_list,
+            slot_role=slot_tag,
+            eq_names=eqs,
+            equip_map=equip_map,
+            phase_raw=phase_raw,
+            team_all_equip_names=team_all_equips,
+            legend_chess_text=legend_text_audit,
+            emoji_text_gap=BOARD_EMOJI_TEXT_GAP,
+        )
+
+        if slot_tag == "挂件":
+            rec_show = "无"
+        else:
+            nxt = pick_next_finished_recommendations(
+                role_tags=role_tags_list,
+                slot_role=slot_tag,
+                eq_names=eqs,
+                n_eq=n_eq,
+                meta_rec=rec_list,
+                equip_map=equip_map,
+            )
+            rec_show = "无" if n_eq >= 3 else ("、".join(nxt) if nxt else "无")
+
+        slot_ic = BOARD_SLOT_ICON_FULL if n_eq >= 3 else BOARD_SLOT_ICON_EMPTY
+        line1 = REPORT_PIPE_SEP.join([disp, star_seg, cost_s, role_line, loc])
+        line2 = (
+            f"{slot_ic}{BOARD_EMOJI_TEXT_GAP}槽位状态：{n_eq}/3{REPORT_PIPE_SEP}"
+            f"当前装备：{carry_label}{REPORT_PIPE_SEP}推荐装备：{rec_show}"
+        )
+        block = f"{line1}\n{line2}\n" + "\n".join(audit_lines)
+
+        is_core = slot_tag in ("主C", "主坦")
+        is_worker = slot_tag in ("打工仔", "混合", "挂件")
+        if not (is_core or is_worker):
+            continue
+
+        grp = (0 if slot_tag == "主C" else 1) if is_core else (0 if slot_tag in ("打工仔", "混合") else 1)
+
+        raw.append(
+            {
+                "core": is_core,
+                "grp": grp,
+                "star_n": star_n,
+                "cost_n": cost_n,
+                "row_idx": row_idx,
+                "block": block,
+            }
+        )
+
+    core_rows = [x for x in raw if x["core"]]
+    work_rows = [x for x in raw if not x["core"]]
+    core_rows.sort(key=lambda x: (x["grp"], -x["star_n"], -x["cost_n"], x["row_idx"]))
+    work_rows.sort(key=lambda x: (x["grp"], -x["star_n"], -x["cost_n"], x["row_idx"]))
+    return [x["block"] for x in core_rows], [x["block"] for x in work_rows]
 
 
 def _self_hp_from_player(player: Dict[str, Any]) -> str:
@@ -417,22 +753,412 @@ def _self_hp_from_player(player: Dict[str, Any]) -> str:
     return ""
 
 
-def _equip_column_labels(summary: Dict[str, Any]) -> str:
+def _gold_to_next_level_display(exp_str: str, level_str: str) -> str:
+    """
+    「升级所需金币」：由经验条「当前/本级上限」推算再买经验所需金币。
+    按金铲铲商店 4 金币买 4 经验（1 金币≈1 经验），剩余经验缺口即金币数。
+    10 级及以上视为无法再升级（与常见对局等级上限一致）；无法解析经验条时返回 ?。
+    """
+    lv_digits = re.findall(r"\d+", str(level_str or "").strip())
+    try:
+        level_n = int(lv_digits[-1]) if lv_digits else 0
+    except (TypeError, ValueError):
+        level_n = 0
+    if level_n >= 10:
+        return "已满级"
+    m = re.search(r"(\d+)\s*[/／]\s*(\d+)", str(exp_str or "").strip())
+    if not m:
+        return "?"
+    try:
+        cur = int(m.group(1))
+        cap = int(m.group(2))
+    except ValueError:
+        return "?"
+    rem = max(0, cap - cur)
+    return str(rem)
+
+
+def _get_legend_equip_tables() -> Tuple[Set[str], List[Tuple[str, str, str]]]:
+    """基础装备名集合 + [(成装名, 组件a, 组件b), ...]（组件名与游戏内一致）。"""
+    global _LEGEND_EQUIP_TABLES
+    if _LEGEND_EQUIP_TABLES is not None:
+        return _LEGEND_EQUIP_TABLES
+    bases: Set[str] = set()
+    recipes: List[Tuple[str, str, str]] = []
+    path = REPO_ROOT / "data" / "rag_legend_equip.jsonl"
+    if path.is_file():
+        try:
+            with path.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    name = str(row.get("name") or "").strip()
+                    et = str(row.get("equip_type") or "")
+                    if et == "基础装备" and name:
+                        bases.add(name)
+                    syn = row.get("synthesis")
+                    if isinstance(syn, list) and len(syn) == 2:
+                        a = str(syn[0] or "").strip()
+                        b = str(syn[1] or "").strip()
+                        if name and a and b:
+                            recipes.append((name, a, b))
+        except OSError:
+            pass
+    _LEGEND_EQUIP_TABLES = (bases, recipes)
+    return _LEGEND_EQUIP_TABLES
+
+
+def _craftable_from_component_counts(
+    counts: Dict[str, int],
+    recipes: List[Tuple[str, str, str]],
+) -> List[str]:
+    """当前散件 multiset 下，可一次合成的成装列表（去重、排序）。"""
+    out: List[str] = []
+    seen: Set[str] = set()
+    for name, a, b in recipes:
+        if name in seen:
+            continue
+        if a == b:
+            ok = counts.get(a, 0) >= 2
+            pair_s = f"{a}+{b}"
+        else:
+            ok = counts.get(a, 0) >= 1 and counts.get(b, 0) >= 1
+            pair_s = f"{a}+{b}"
+        if ok:
+            seen.add(name)
+            out.append(f"{name}（{pair_s}）")
+    return sorted(out)
+
+
+def _format_equip_column_block(summary: Dict[str, Any]) -> str:
+    """
+    左侧装备栏：散件 / 滞留成装 / 可合成装备（由当前散件 + legend 合成表推导）。
+    """
     ec = (summary.get("modules") or {}).get("equip_column") or {}
     m = ec.get("matches") if isinstance(ec, dict) else None
     if not isinstance(m, list) or not m:
-        return "无"
-    names: List[str] = []
+        return "散件：无\n滞留成装：无\n可合成装备：无"
+    stems: List[str] = []
     for x in m:
         if isinstance(x, dict):
             n = str(x.get("name_stem") or "").strip()
             if n:
-                names.append(n)
-    return "、".join(names) if names else "无"
+                stems.append(n)
+    if not stems:
+        return "散件：无\n滞留成装：无\n可合成装备：无"
+
+    bases, recipes = _get_legend_equip_tables()
+    san: List[str] = []
+    cheng: List[str] = []
+    for n in stems:
+        if n in bases:
+            san.append(n)
+        else:
+            cheng.append(n)
+
+    cnt = Counter(san)
+    craft_lines = _craftable_from_component_counts(dict(cnt), recipes)
+
+    def _join(xs: List[str]) -> str:
+        return "、".join(xs) if xs else "无"
+
+    return (
+        f"散件：{_join(san)}\n"
+        f"滞留成装：{_join(cheng)}\n"
+        f"可合成装备：{_join(craft_lines)}"
+    )
 
 
-def build_tactical_brief(summary: Dict[str, Any]) -> str:
-    """将 pipeline 的 *_summary.json 压成自然语言「战术快报」，不含 TCV 调试长文。"""
+def _format_equip_column_emoji(summary: Dict[str, Any]) -> str:
+    """左侧装备：滞留优先，其次散件与可合成。"""
+    ec = (summary.get("modules") or {}).get("equip_column") or {}
+    m = ec.get("matches") if isinstance(ec, dict) else None
+    if not isinstance(m, list) or not m:
+        return f"- 滞留成装: 无\n- 散件状态: 无{REPORT_PIPE_SEP}可合成: 无"
+    stems: List[str] = []
+    for x in m:
+        if isinstance(x, dict):
+            n = str(x.get("name_stem") or "").strip()
+            if n:
+                stems.append(n)
+    if not stems:
+        return f"- 滞留成装: 无\n- 散件状态: 无{REPORT_PIPE_SEP}可合成: 无"
+
+    bases, recipes = _get_legend_equip_tables()
+    san: List[str] = []
+    cheng: List[str] = []
+    for n in stems:
+        if n in bases:
+            san.append(n)
+        else:
+            cheng.append(n)
+
+    cnt = Counter(san)
+    craft_lines = _craftable_from_component_counts(dict(cnt), recipes)
+
+    def _join(xs: List[str]) -> str:
+        return "、".join(xs) if xs else "无"
+
+    cheng_s = _join(cheng)
+    san_s = _join(san)
+    craft_s = _join(craft_lines)
+    return (
+        f"- 滞留成装: {cheng_s}\n"
+        f"- 散件状态: {san_s}{REPORT_PIPE_SEP}可合成: {craft_s}"
+    )
+
+
+def _format_situation_line(
+    phase: str,
+    level: str,
+    exp: str,
+    gold: str,
+    streak: str,
+    hp_self: str,
+    up_gold: str,
+) -> str:
+    lv = (level or "").strip()
+    if lv and not lv.endswith("级"):
+        lv = f"{lv}级"
+    elif not lv:
+        lv = "?"
+    exp_p = (exp or "").strip()
+    if exp_p and exp_p != "?":
+        exp_show = f" ({exp_p})" if not exp_p.startswith("(") else f" {exp_p}"
+    else:
+        exp_show = ""
+    st = (streak or "").strip()
+    if "无连胜" in st and "败" in st:
+        st_short = "无"
+    elif "连胜" in st or "连败" in st:
+        st_short = st
+    else:
+        st_short = "无" if not st else st
+    ug = up_gold or "?"
+    if ug != "已满级" and ug != "?":
+        ug_line = f"{ug}金币"
+    else:
+        ug_line = ug
+    return (
+        f"阶段 {phase or '?'}{REPORT_PIPE_SEP}等级 {lv}{exp_show}，升级需 {ug_line}{REPORT_PIPE_SEP}"
+        f"金币 {gold or '?'} 💰{REPORT_PIPE_SEP}血量 {hp_self} 🩸{REPORT_PIPE_SEP}胜负 {st_short}"
+    )
+
+
+def _format_rag_top_section(rag_meta: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for i, m in enumerate(rag_meta):
+        if not isinstance(m, dict):
+            continue
+        rk = m.get("rank")
+        if rk is None:
+            rk = i + 1
+        full_name = str(m.get("name") or "")
+        short, traits = _lineup_display_name_and_traits(full_name)
+        if traits:
+            lines.append(f"- Top{rk}: {short} - {traits}")
+        else:
+            lines.append(f"- Top{rk}: {short}")
+    return "\n".join(lines) if lines else "- （无）"
+
+
+def _target_equip_names_from_rag(
+    meta: Dict[str, Any],
+    equip_map: Dict[str, Dict[str, Any]],
+    role_tags: List[str],
+    slot_role: str,
+) -> List[str]:
+    """从 core chess RAG（meta.recommended_equips / top_equips）取推荐装；空则 equip_recom 按定位兜底。"""
+    rec = meta.get("recommended_equips") if isinstance(meta.get("recommended_equips"), list) else []
+    out = [str(x).strip() for x in rec if str(x).strip()]
+    if out:
+        return out[:6]
+    tops = meta.get("top_equips")
+    if isinstance(tops, list):
+        for x in tops:
+            if isinstance(x, dict):
+                n = str(x.get("name") or "").strip()
+                if n:
+                    out.append(n)
+        if out:
+            return out[:6]
+    return pick_next_finished_recommendations(
+        role_tags=role_tags,
+        slot_role=slot_role,
+        eq_names=[],
+        n_eq=0,
+        meta_rec=[],
+        equip_map=equip_map,
+    )
+
+
+def _target_chess_detail_lines(
+    chess_name: str,
+    *,
+    cost: Optional[int],
+    slot_role_fallback: str,
+    core_list: List[Dict[str, Any]],
+    equip_map: Dict[str, Dict[str, Any]],
+    legend_map: Dict[str, Dict[str, Any]],
+    cost_unknown: bool = False,
+) -> List[str]:
+    """目标棋子：首行 名称|费|定位；续行 羁绊|职业粗分|推荐装（无「攻略定位/职业倾向」字样）。"""
+    if cost_unknown:
+        cs = "?费"
+    else:
+        cs = f"{int(cost)}费" if cost is not None else "?费"
+    row = lookup_core_chess_row(chess_name, core_list)
+    meta: Dict[str, Any] = {}
+    if isinstance(row, dict) and isinstance(row.get("meta"), dict):
+        meta = row["meta"]
+
+    slot_role = str(meta.get("slot_role") or slot_role_fallback or "?")
+    line1 = f"- {chess_name} | {cs} | {slot_role}"
+
+    traits: List[str] = []
+    if isinstance(meta.get("traits"), list):
+        traits = [str(x).strip() for x in meta["traits"] if str(x).strip()]
+    if not traits and legend_map:
+        nk = (chess_name or "").strip().rstrip("?").rstrip("？").strip()
+        leg = legend_map.get(nk)
+        if isinstance(leg, dict) and isinstance(leg.get("traits"), list):
+            traits = [str(x).strip() for x in leg["traits"] if str(x).strip()]
+
+    rtags = meta.get("role_tags") if isinstance(meta.get("role_tags"), list) else []
+    role_tags = [str(x).strip() for x in rtags if str(x).strip()]
+    if not role_tags and traits:
+        role_tags = traits_to_role_tags(traits)
+
+    t_s = "、".join(traits)
+    rt_s = "、".join(role_tags) if role_tags else "—"
+
+    eqs = _target_equip_names_from_rag(meta, equip_map, role_tags, slot_role)
+    rec_s = "、".join(eqs) if eqs else "无"
+
+    parts: List[str] = []
+    if t_s:
+        parts.append(f"羁绊：{t_s}")
+    parts.append(rt_s)
+    parts.append(f"推荐装备：{rec_s}")
+    line2 = "  " + REPORT_PIPE_SEP.join(parts)
+    return [line1, line2]
+
+
+def _format_chess_target_and_discard(
+    chess_meta: List[Dict[str, Any]],
+    core_list: List[Dict[str, Any]],
+) -> Tuple[str, str, str]:
+    """返回 (目标棋子块, 弃子块, 装备继承块)。目标棋子含羁绊、职业粗分、推荐装（core+RAG 补全）。"""
+    if not chess_meta or not isinstance(chess_meta[0], dict):
+        return "", "", ""
+    equip_map = load_legend_equip_full_map()
+    legend_map = load_legend_chess_name_map(DEFAULT_RAG_LEGEND_CHESS)
+    m0 = chess_meta[0]
+    target_lines: List[str] = []
+    for e in m0.get("missing_ge4") or []:
+        if not isinstance(e, dict):
+            continue
+        h = str(e.get("chess_name") or "").strip()
+        if not h:
+            continue
+        c = e.get("cost")
+        rl = str(e.get("slot_role") or "?")
+        try:
+            c_int = int(c) if c is not None else None
+        except (TypeError, ValueError):
+            c_int = None
+        target_lines.extend(
+            _target_chess_detail_lines(
+                h,
+                cost=c_int,
+                slot_role_fallback=rl,
+                core_list=core_list,
+                equip_map=equip_map,
+                legend_map=legend_map,
+                cost_unknown=False,
+            )
+        )
+    unk = m0.get("missing_unknown_cost") or []
+    if isinstance(unk, list):
+        for e in unk:
+            if not isinstance(e, dict):
+                continue
+            h = str(e.get("chess_name") or "").strip()
+            if not h:
+                continue
+            rl = str(e.get("slot_role") or "?")
+            target_lines.extend(
+                _target_chess_detail_lines(
+                    h,
+                    cost=None,
+                    slot_role_fallback=rl,
+                    core_list=core_list,
+                    equip_map=equip_map,
+                    legend_map=legend_map,
+                    cost_unknown=True,
+                )
+            )
+    target_block = "\n".join(target_lines) if target_lines else "- （无）"
+
+    discard_lines: List[str] = []
+    gu_rows = [g for g in (m0.get("board_guajia") or []) if isinstance(g, dict)]
+
+    def _cost_key(g: Dict[str, Any]) -> Tuple[int, int, str]:
+        cs = str(g.get("cost_str") or "")
+        m = re.search(r"(\d+)", cs)
+        cn = -int(m.group(1)) if m else 0
+        ss = str(g.get("star_seg") or "")
+        sm = re.search(r"(\d+)", ss)
+        sn = -int(sm.group(1)) if sm else 0
+        return (cn, sn, str(g.get("display") or ""))
+
+    gu_rows.sort(key=_cost_key)
+    for g in gu_rows:
+        disp = str(g.get("display") or "")
+        star_seg = str(g.get("star_seg") or "?星")
+        cost_str = str(g.get("cost_str") or "?费")
+        role = str(g.get("slot_role") or "挂件")
+        discard_lines.append(f"- {disp} | {star_seg} | {cost_str} | {role}")
+    discard_block = "\n".join(discard_lines) if discard_lines else "- （无）"
+
+    eq_inh = ""
+    ei = m0.get("equipment_inheritance") if isinstance(m0.get("equipment_inheritance"), dict) else {}
+    flows = ei.get("flows") or []
+    guajia_has_equip = False
+    for row in ei.get("guajia_carried_equips") or []:
+        if isinstance(row, dict) and (row.get("equips") or []):
+            guajia_has_equip = True
+            break
+    if flows:
+        sub: List[str] = []
+        for f in flows:
+            if not isinstance(f, dict):
+                continue
+            ln = str(f.get("line") or "").strip()
+            if ln:
+                sub.append(f"  - {ln}")
+        if sub:
+            eq_inh = "\n".join(sub)
+    elif guajia_has_equip:
+        eq_inh = "  - （无可继承成装：场上主力核心与目标棋子均无法承接挂件当前成装。）"
+    return target_block, discard_block, eq_inh
+
+
+def build_matchbook_report(
+    summary: Dict[str, Any],
+    *,
+    core_chess_path: Optional[Path] = None,
+    summary_json_path: Optional[Path] = None,
+    rag_meta: Optional[List[Dict[str, Any]]] = None,
+    chess_meta: Optional[List[Dict[str, Any]]] = None,
+    no_rag: bool = False,
+) -> str:
+    """终端/模型共用的结构化对局情报（emoji + 分隔线）。"""
     player = (summary.get("modules") or {}).get("player") or {}
     analysis = summary.get("analysis") or {}
     gt = (analysis.get("group_traits_merged") or {}) if isinstance(analysis, dict) else {}
@@ -444,30 +1170,89 @@ def build_tactical_brief(summary: Dict[str, Any]) -> str:
     streak = _field_parsed(player, "streak")
     my_hp = _self_hp_from_player(player)
     hp_self = my_hp if my_hp else "?"
+    up_gold = _gold_to_next_level_display(exp, level)
 
-    bonds_line = str(gt.get("merged_bonds_one_line") or "").strip()
     tm = gt.get("trait_count_max") if isinstance(gt, dict) else None
     if isinstance(tm, dict) and tm:
-        trait_summary = "，".join(f"{int(n)}{t}" for t, n in sorted(tm.items(), key=lambda x: int(x[1]), reverse=True)[:12])
+        trait_block = _format_traits_block(tm)
     else:
-        trait_summary = bonds_line or "(无)"
+        trait_block = str(gt.get("merged_bonds_one_line") or "").strip() or "(无)"
 
-    board_lines = _format_board_lines(summary)
-    board_block = "\n".join(f"  - {x}" for x in board_lines) if board_lines else "  (无)"
+    ccp = core_chess_path or DEFAULT_RAG_CORE_CHESS
+    core_list = load_core_chess_list(ccp)
+    core_sec, work_sec = _build_board_emoji_sections(
+        summary,
+        core_list,
+        summary_json_path=summary_json_path,
+        legend_chess_path=DEFAULT_RAG_LEGEND_CHESS,
+    )
+    core_txt = "\n".join(core_sec) if core_sec else "- （无）"
+    work_txt = "\n".join(work_sec) if work_sec else "- （无）"
 
-    return f"""[当前局势]
-阶段 {phase or '?'} | 等级 {level or '?'} | 经验 {exp or '?'} | 金币 {gold or '?'} | 胜负 {streak or '?'} | 我的血量 {hp_self}
+    sit = _format_situation_line(phase, level, exp, gold, streak, hp_self, up_gold)
 
-[羁绊]
-{trait_summary}
+    parts: List[str] = [
+        f"📊{REPORT_EMOJI_GAP}战术快报",
+        REPORT_SEP,
+        f"📍{REPORT_EMOJI_GAP}局势分析",
+        sit,
+        REPORT_SEP,
+        f"🧩{REPORT_EMOJI_GAP}当前羁绊",
+        trait_block,
+        REPORT_SEP,
+        f"🔥{REPORT_EMOJI_GAP}主力核心",
+        core_txt,
+        REPORT_SEP,
+        f"🔧{REPORT_EMOJI_GAP}打工挂件",
+        work_txt,
+        REPORT_SEP,
+        f"🎒{REPORT_EMOJI_GAP}左侧装备",
+        _format_equip_column_emoji(summary),
+    ]
 
-[棋盘与装备]
-（「站位」后为棋盘行,列；紧邻为棋子识别星级，来自 fightboard）
-{board_block}
+    if not no_rag and rag_meta:
+        parts.extend(
+            [
+                REPORT_SEP,
+                f"🏆{REPORT_EMOJI_GAP}推荐阵容",
+                _format_rag_top_section(rag_meta),
+            ]
+        )
 
-[左侧装备栏散件]
-{_equip_column_labels(summary)}
-"""
+    if not no_rag and chess_meta:
+        tb, db, eqh = _format_chess_target_and_discard(chess_meta, core_list)
+        parts.extend(
+            [
+                REPORT_SEP,
+                f"🎯{REPORT_EMOJI_GAP}目标棋子",
+                tb,
+                REPORT_SEP,
+                f"📋{REPORT_EMOJI_GAP}弃子清单",
+                db,
+            ]
+        )
+        if eqh:
+            parts.extend([REPORT_SEP, f"🔗{REPORT_EMOJI_GAP}装备继承", eqh])
+
+    parts.append(REPORT_SEP)
+    return "\n".join(parts)
+
+
+def build_tactical_brief(
+    summary: Dict[str, Any],
+    *,
+    core_chess_path: Optional[Path] = None,
+    summary_json_path: Optional[Path] = None,
+) -> str:
+    """兼容 benchmark：仅战报块，不含 RAG 阵容/棋子扩展节。"""
+    return build_matchbook_report(
+        summary,
+        core_chess_path=core_chess_path,
+        summary_json_path=summary_json_path,
+        rag_meta=None,
+        chess_meta=None,
+        no_rag=True,
+    )
 
 
 def _load_lineup_docs(path: Path) -> List[Dict[str, Any]]:
@@ -553,11 +1338,11 @@ def retrieve_lineup_rag(
     top_k: int = 3,
     *,
     min_quality: Optional[str] = None,
-) -> Tuple[str, List[str], List[Dict[str, Any]]]:
+) -> Tuple[str, List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     简易检索：关键词在阵容 doc['text'] 中的命中数（无需向量库）。
     min_quality：如 A 表示仅保留评级不劣于 A 的攻略（S 优于 A）。
-    返回 (拼好的 RAG 文本块, lineup_id 列表, 终端展示用元数据列表)。
+    返回 (拼好的 RAG 文本块, lineup_id 列表, 终端展示用元数据列表, 命中的完整 doc 列表（与 meta 同序）)。
     """
     docs = _load_lineup_docs(rag_path)
     mq = (min_quality or "").strip().upper()[:1]
@@ -565,7 +1350,7 @@ def retrieve_lineup_rag(
         max_rank = _lineup_quality_rank(mq)
         docs = [d for d in docs if _lineup_quality_rank(str(d.get("quality") or "")) <= max_rank]
     if not docs:
-        return ("（阵容智库 RAG 在给定评级过滤下无可用条目或文件为空。）", [], [])
+        return ("（阵容智库 RAG 在给定评级过滤下无可用条目或文件为空。）", [], [], [])
 
     kws = _extract_keywords_for_rag(summary)
     if not kws:
@@ -590,7 +1375,8 @@ def retrieve_lineup_rag(
     blocks: List[str] = []
     ids: List[str] = []
     meta: List[Dict[str, Any]] = []
-    for sc, d in picked:
+    picked_docs: List[Dict[str, Any]] = []
+    for rank, (sc, d) in enumerate(picked, start=1):
         lid = str(d.get("lineup_id") or "")
         ids.append(lid)
         title = str(d.get("name") or lid)
@@ -598,128 +1384,129 @@ def retrieve_lineup_rag(
         # 控制长度，避免单次请求过大
         if len(body) > 3500:
             body = body[:3500] + "\n…(截断)"
-        blocks.append(f"--- 阵容攻略 [{lid}] {title} (匹配分≈{sc}) ---\n{body}")
+        blocks.append(f"--- Top{rank} | {title} ---\n{body}")
         meta.append(
             {
                 "lineup_id": lid,
                 "name": title,
                 "quality": str(d.get("quality") or ""),
-                "season": str(d.get("season") or ""),
+                "rank": rank,
                 "match_score": sc,
             }
         )
+        picked_docs.append(d)
 
-    return ("\n\n".join(blocks), ids, meta)
-
-
-def retrieve_core_chess_rag(
-    summary: Dict[str, Any],
-    rag_path: Path,
-    top_k: int = 8,
-) -> Tuple[str, List[str], List[Dict[str, Any]]]:
-    """
-    棋子智库：rag_core_chess.jsonl，**仅**按战术快报「棋盘与装备」上的棋子名检索
-   （summary.confirmed_fightboard_results，与 TCV confirmed 一致；不用羁绊、不用 agg_top、不扫文档全文）。
-    每条输出棋子名、定位（主C/主坦/打工仔等）、推荐装备。
-    """
-    docs = _load_lineup_docs(rag_path)
-    core = [
-        d
-        for d in docs
-        if str(d.get("type") or "") == "core_chess"
-        or str(d.get("id") or "").startswith("core_chess:")
-    ]
-    if not core:
-        return ("（棋子智库 RAG 库未加载或为空。）", [], [])
-
-    priority = _tcv_board_hero_names_for_rag(summary)
-    if not priority:
-        return (
-            "（棋子智库：无 confirmed_fightboard_results 或无有效棋子名，跳过场上棋子检索。）",
-            [],
-            [],
-        )
-
-    def _score_one(d: Dict[str, Any]) -> int:
-        cn = str(d.get("chess_name") or "")
-        sc = 0
-        for kw in priority:
-            if not kw or len(kw) < 2:
-                continue
-            if cn == kw:
-                sc += 10
-            elif kw in cn or cn in kw:
-                sc += 5
-        return sc
-
-    scored: List[Tuple[int, Dict[str, Any]]] = [(_score_one(d), d) for d in core]
-    scored.sort(key=lambda x: (-x[0], str((x[1] or {}).get("chess_name") or "")))
-    picked = [x for x in scored if x[0] > 0][: max(1, int(top_k))]
-    if not picked:
-        return (
-            "（棋子智库：场上棋子名未在库中命中；可检查 legend/棋子库拼写是否一致。）",
-            [],
-            [],
-        )
-
-    blocks: List[str] = []
-    ids: List[str] = []
-    meta: List[Dict[str, Any]] = []
-    for sc, d in picked:
-        cid = str(d.get("id") or d.get("chess_name") or "")
-        ids.append(cid)
-        cn = str(d.get("chess_name") or "?")
-        m = d.get("meta") if isinstance(d.get("meta"), dict) else {}
-        role = str(m.get("slot_role") or "未知")
-        equips = m.get("recommended_equips") if isinstance(m.get("recommended_equips"), list) else []
-        eq_lines = [str(x).strip() for x in equips if str(x).strip()]
-        eq_s = "、".join(eq_lines) if eq_lines else "（库中暂无推荐成装）"
-        blocks.append(
-            f"--- [{cn}] 定位：{role}（匹配分≈{sc}）---\n推荐装备：{eq_s}"
-        )
-        meta.append(
-            {
-                "id": cid,
-                "chess_name": cn,
-                "slot_role": role,
-                "match_score": int(sc),
-                "recommended_equips": eq_lines,
-            }
-        )
-
-    return ("\n\n".join(blocks), ids, meta)
+    return ("\n\n".join(blocks), ids, meta, picked_docs)
 
 
 def _coach_system_prompt() -> str:
-    return """你是《金铲铲之战》S17 顶尖高手“随风听笛”。你正叼着烟在网吧带菜鸡兄弟“哈基星”上分。你不仅有全服顶级的操作直觉，还有一张能把哈基星喷退游的嘴以及奇妙的幽默感。
+    return """一、关于你
+你是金铲铲之战的顶尖棋手。ID 随风听笛，你正在网吧叼着烟、指导你的好兄弟哈基星下棋。
+你拥有奇妙的幽默感，言语中透露着高手的冷静与淡淡的烦躁。
 
-### 第一步：【你的输入情报汇总】
-你会收到包含以下信息的结构化文本，这是你判定的唯一依据：
-1. **哈基星提问**：他的语音原话（多轮时首轮为完整块，后续轮次可能只有一句追问，仍视为同一局、同一套快报与 RAG，勿让哈基星复述战报）。
-2. **战术快报**：包含 [阶段/等级/经验/金币/胜负/我的血量/羁绊/棋盘装备/装备栏散件]。
-3. **阵容智库 (RAG)**：当前的终点站目标与运营节奏。
-4. **棋子智库 (RAG)**：谁是核心（主C/主坦/打工仔），谁该拿什么装备。
+二、输入情报
+你会收到包含以下信息的结构化文本，这是你成为你分析的基础：
+1. 哈基星提问：他的弱智原话（多轮时首轮为完整块，后续轮次可能只有一句追问，仍视为同一局、同一套快报与 RAG，勿让哈基星复述战报）。
+2. 战术快报：他当前的对局信息。包含 [阶段/等级/经验/金币/胜负/血量/羁绊/棋子/装备]等；场上各子「主C/主坦/打工仔/挂件」以本块为准。其中「🎯 目标棋子」已含缺口棋子的羁绊、职业倾向、推荐装备（来自棋子库）；「♻️ 弃子清单」「🔗 装备继承」与 Top1 对齐。
+3. 阵容智库 (RAG)：附录中的攻略长文，用于运营/站位/出装细节。
 
-### 第二步：【随风听笛的脑内回路】（思考逻辑，不准输出）
-1. **抓大腿**：对比快报与棋子智库，看场上谁是真神（2星高费 > 1星高费 > 2星低费）。
-2. **找缺口**：主C满三件套没？主坦顶得住吗？站位是不是在送？
-   - **搜牌保底逻辑**：如果 RAG 阵容已经成型或不知道搜谁，可下令搜【通用5费主C/主坦】：包括奥巴马/稻草人/龙女/千珏/炸弹人/塞拉斯）。
-3. **断节奏**：5阶段以后血低于40还不D牌？9级50块等死？看[阶段/金币]断定该搜还是该攒。
-4. **定方向**：对比阵容智库，看哈基星是在玩版本答案还是在玩勾八。
+一、分析逻辑
+1. 资产状态实例化
+你需遍历{战术快报}与{{阵容智库RAG}}（附录），并按下述逻辑进行内部 [标签] 标记：
+Step1：棋子状态标记（场上定位以战术快报棋盘行为准）
+  [T0 - 真神]：满足 ({{战术快报/定位}} == "主C" 或 "主坦") AND ({{战术快报/星级}} >= 2)。
+  [T1 - 大腿]：满足 ({{战术快报/定位}} == "主C" 或 "主坦" AND {{战术快报/星级}} == 1 AND {{费用}} >= 4) OR ({{战术快报/定位}} == "打工仔" AND {{星级}} >= 2)。
+  [T2 - 挂件]：满足 (阶段 >= 5-1) AND (不属于 {{阵容智库}} 核心羁绊) AND (装备数 == 0) AND (星级 < 2) AND (费用 <= 3)。
+  [Slot_Full] 判定：必须满足 Len(棋子/装备栏列表) == 3，严禁将携带 1 件或 2 件装备的棋子标记为 Slot_Full。内部审计时必须显式数出 1, 2, 3。
 
-### 第三步：【你的输出协议】
-1. **意图第一**：
-    - 问具体的（合什么、D不D、找谁）：**直接给死命令**，不要扯其他方面的建议。
-    - 问模糊的（救命、玩什么）：**抓当前最致命的短板（如：该D不D、主C没装、站位逆天）暴力纠错**。
-2. **反教条主义**：场上已成型的 4费 / 5费 2星主C或主坦是绝对资产，**严禁** 为了凑 RAG 阵容让他卖掉大腿或扒装备。
-3. **装备铁律：**装备只能给【战术快报】中存在的棋子，且优先给主C / 主坦，其次是打工仔，最后才是挂件；如果棋子已经满装备了，严禁再建议给装备。
-4. **信息脱敏**：严禁复述 JSON 参数，严禁展示思考过程，严禁 1.2.3. 或 Markdown。
+Step2：阵容质量标记
+[高费置换态] = True：满足 (阶段 >= 4-3) AND (场上存在 [T2-挂件])
+[阵容残缺态] = True：满足 ({{阵容智库}} 核心羁绊棋子) ∉ {{场上棋子}}
 
-### 第四步：【性格与语言风格】
-- **拒绝废话**：不准说建议、分析、根据、可能。只有【1句话】，必须是纯口语。
-- **毒舌幽默**：挖苦哈基星是日常，但他操作偶尔对了一次，也要夸奖一下他。
-- **黑话简称**：尽量不说棋子或装备的官方名称，改为非正式简称，例如奥巴马、反甲等。
-- **真人气息：**若哈基星问你游戏之外的问题，按照你的兄弟人设正常回答即可，不一定非要跟金铲铲有关。"""
+Step3：阵容提升分析
+在激活 [阵容残缺态]时，你需检索[核心羁绊棋子]：
+[核心羁绊棋子]： {{阵容智库RAG}} 中标记为“核心/羁绊关键”但 {{场上棋子}} 中缺失的棋子名称。
+在激活 [高费置换态]时，你需检索[可替高费棋子]：
+[可替高费棋子]：对局情报「🎯 目标棋子」中列出的高费缺口、或阵容攻略明示的高费核心，且当前场上尚未上场（勿与战术快报已有子重复）。
+
+2. 装备分配协议
+你在处理装备时，必须严格执行以下内部线性逻辑：
+Step1：战力缺口预检
+在生成任何建议前，优先通过 {{场上棋子}} 的装备分布激活 [缺口标签]：
+[防御缺口] = True：满足 (场上 [T0/T1] 且 {{定位}} == "主坦") 的总装备数 < 3。
+[输出缺口] = True：满足 (场上 [T0/T1] 且 {{定位}} == "主C") 的总装备数 < 3。
+[成装滞留] = True：满足 {{战术快报/左侧装备栏}}有成装，且场上[T0/T1] Slot_Full = False）
+[缺口优先级]：[防御缺口] > [输出缺口]。
+
+Step2：合成与分配决策
+  [必合成装]：({{战术快报/可合成装备}}) ∩ ({{阵容智库 RAG}} 文本中的成型出装/装备思路)
+  [通用成装]：IF (必合成装==0) -> 依据 [战力天平审计] 结论，从 {{可合成装备}} 中选取提升最大的单品。
+* [通用成装] 合成优先级：[防御缺口]＞[输出缺口]
+  [装备分发优先级]：成装挂载顺序严禁违背：
+  Top 1: [T0 - 真神] (且 [Slot_Full] == False)
+  Top 2: [T1 - 大腿] (且 [Slot_Full] == False)
+  Top 3: {{战术快报/定位}} == "挂件"
+  Top 4: {{战术快报/定位}} == "打工仔"
+* [纹章/特殊装处理]：对于纹章（转职），除非 {{阵容智库}} 明确要求，否则禁止建议调动，保持原状。
+
+3. 空间坐标判定 
+[判定对象白名单]：
+你在进行站位分析时，仅允许对标记为 [T0] 或 [T1]的棋子进行坐标审计。
+[执行逻辑]：
+核对身份：拿到 (Row, Col) 后，先对位 {{战术快报}} 棋盘行中的 [定位]。
+逻辑匹配：
+IF (定位 == "主C") AND (Row <= 2)：触发 [送命站位]。
+IF (定位 == "主坦") AND (Row >= 3)：触发 [假赛站位]。
+静默协议：若场上所有 主C 均在 Row >= 3 且所有 主坦 均在 Row <= 2，则判定 [Trigger D] 未命中，不发表任何指令 。
+
+4. 未来行动指令
+模型将根据以下条件进行指令判定：
+[梭哈]：一次性花光所有{{金币}}，寻找 [核心羁绊棋子] / [可替高费棋子]，或将场上 [T0/T1] 追至 2/3 星。
+[慢D]：将{{金币}}花费至==50，寻找 [核心羁绊棋子] / [可替高费棋子]，或将场上 [T0/T1] 追至 2/3 星。
+[拉人口]：用({{金币}}购买({{经验}}以提升至下一({{等级}}
+[存钱]：将({{金币}}积累至>= 50
+
+二、分析顺序
+Step1：将所有棋子实例化为 [T0/T1/T2]，并标记 [Slot_Full]，并检查阵容是否处于[高费置换态]/[阵容残缺态]
+Step2：运行 [装备分配协议]，判断当前阵容是否存在[防御缺口] /[输出缺口]，检查是否存在[必合成装]/[通用成装]/[成装滞留]，并通过[装备分发优先级]确定流向；
+Step3：根据({{战术快报}}中的条件约束，确定未来行动指令[梭哈]/[慢D]/[拉人口]/[存钱]
+Step4：计算 (Row, Col) 坐标，判定是否存在 [送命站位] 或 [假赛站位]。
+
+*** [调试模式：内部思维链路]*** 
+在生成最终输出前，你必须先在 [THINKING] 标签内完成以下逻辑闭环扫描（此部分不计入 60 字限制）：
+资产定性：列出当前识别到的 [T0/T1] 棋子及其定位。
+缺口审计：明确当前是 [防御缺口] 还是 [输出缺口]。
+坐标校对：提取目标主C/主坦的原始 Row 数值，判定是否真的命中 [送命/假赛]。
+Trigger 锁定：明确最终锁定的唯一 Trigger 编号（A/B/C/D
+“[THINKING] 过程必须基于原始数据事实，严禁为了匹配输出结论而篡改逻辑审计结果。”
+
+
+三、 输出逻辑
+1. 优先级纠偏：
+完成所有逻辑分析后，必须按照 [优先级 A > B > C > D] 进行扫描。一旦命中高优先级条件，立即截断后续思考，锁定该意图为唯一输出。
+Trigger A：节奏生死
+判定条件：满足 (血量 < 25) OR (血量 < 40 AND 阶段 >= 5-1) 
+执行指令：下令 [梭哈]，并强制要求卖掉场上 [T2-挂件] 为即将搜到的卡腾位。
+Trigger B：资产优化
+判定条件：[高费置换态] == True OR [阵容残缺态] == True
+执行指令：下令 [慢D]，并强制要求卖掉场上 [T2-挂件] 为即将搜到的卡腾位。
+* [严格准入]：严禁推荐任何未出现在 {{对局情报}}、{{阵容攻略原文}} 中已分析的棋子（除非为当前阶段合理的通用低费过渡）。
+Trigger C：装备变现
+判定条件：满足 [成装滞留] > 0 OR [必合成装] > 0 OR(散件栏数量 >= 2 AND 有[通用成装]推荐)。
+执行指令：依据 [装备分配协议] 与 [防御缺口]/[输出缺口] 下达合成与挂载指令。
+Trigger D：细节纠偏
+判定条件：命中 [送命站位] OR [假赛站位]。
+执行指令：修正 Row 坐标至合规范围。
+
+四、输出规范
+*** 在生成最终输出前，请先输出 [THINKING]以便调优 *** 
+1、极简一句话：字数 60 以内，严禁列 123，严禁复读[战术快报]数据。
+2、去技术化：严禁对外提及 Trigger、T0、Slot_Full、快报等词汇。
+3、黑话导向：严禁称呼棋子或装备全称，以简称替代：大嘴、挖掘机、奥巴马等；
+4、好兄弟人设：若哈基星问你游戏之外的问题，按照你的兄弟人设正常回答即可，不一定非要跟金铲铲有关。
+5、语言习惯：每次对话必须生成全新的、符合随风听笛性格的原创喷人语录，禁止重复上一轮的词汇。
+6、输出示例：
+     「哈基星你这个蠢货，又他妈存50块钱买棺材板？赶紧全D了找 2 星瑞兹，找不到你赶紧卸载金铲铲回去玩你那泳装蓝梦吧。」"""
 
 
 def _coach_first_user_message(
@@ -728,16 +1515,16 @@ def _coach_first_user_message(
     rag_chess_block: str,
     user_question: str,
 ) -> str:
-    return (
-        "【哈基星问题】\n"
-        f"{user_question.strip()}\n\n"
-        "【战术快报】\n"
-        f"{tactical_brief.strip()}\n\n"
-        "【阵容智库 (RAG)】\n"
-        f"{rag_lineup_block.strip()}\n\n"
-        "【棋子智库 (RAG)】\n"
-        f"{rag_chess_block.strip()}"
-    )
+    """tactical_brief 已含战报及「目标棋子」羁绊/推荐装等；仅附录阵容攻略长文，不再重复喂棋子智库全文。"""
+    _ = rag_chess_block
+    parts = [
+        "【哈基星问题】\n" + user_question.strip(),
+        "【对局情报】\n" + tactical_brief.strip(),
+    ]
+    rl = (rag_lineup_block or "").strip()
+    if rl and not rl.startswith("（本回合未注入"):
+        parts.append("【阵容攻略原文（附录）】\n" + rl)
+    return "\n\n".join(parts)
 
 
 def _coach_followup_user_message(user_question: str) -> str:
@@ -1014,7 +1801,6 @@ def build_coach_bundle(
     """读 summary、构建战术快报与双智库 RAG；供 gemini_v2 与录音并行。"""
     t_prep0 = time.perf_counter()
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    brief = build_tactical_brief(summary)
     _rq = (args.rag_min_quality or "A").strip()
     if _rq.lower() in ("-", "all", "none", "off", "*"):
         min_q: Optional[str] = None
@@ -1027,17 +1813,29 @@ def build_coach_bundle(
         chess_block = "（本回合未注入棋子智库。）"
         chess_meta: List[Dict[str, Any]] = []
     else:
-        rag_block, _rag_ids, rag_meta = retrieve_lineup_rag(
+        rag_block, _rag_ids, rag_meta, lineup_docs = retrieve_lineup_rag(
             summary,
             args.rag_lineup,
             top_k=max(1, int(args.rag_top_k)),
             min_quality=min_q,
         )
+        lineup_top1 = lineup_docs[0] if lineup_docs else None
         chess_block, _chess_ids, chess_meta = retrieve_core_chess_rag(
             summary,
             args.rag_core_chess.resolve(),
             top_k=max(1, int(args.rag_chess_top_k)),
+            lineup_top_doc=lineup_top1,
+            legend_chess_path=DEFAULT_RAG_LEGEND_CHESS,
+            summary_json_path=summary_path,
         )
+    brief = build_matchbook_report(
+        summary,
+        core_chess_path=args.rag_core_chess.resolve(),
+        summary_json_path=summary_path,
+        rag_meta=rag_meta if not args.no_rag else None,
+        chess_meta=chess_meta if not args.no_rag else None,
+        no_rag=args.no_rag,
+    )
     t_prep1 = time.perf_counter()
     return {
         "summary": summary,
@@ -1052,54 +1850,11 @@ def build_coach_bundle(
 
 
 def print_coach_bundle_preview(args: argparse.Namespace, bundle: Dict[str, Any]) -> None:
-    """终端打印三块预览（与送入模型一致）。"""
+    """终端打印完整对局情报（与送入模型的【对局情报】主块一致）。"""
     brief = str(bundle.get("brief") or "")
-    rag_meta = bundle.get("rag_meta") or []
-    chess_meta = bundle.get("chess_meta") or []
-    print("\n" + "=" * 60)
-    print("【1. 战术快报】（预览）")
-    print("=" * 60)
-    print(brief[:2000] + ("…" if len(brief) > 2000 else ""))
-    print("\n" + "=" * 60)
-    print("【2. 阵容智库 RAG】命中（与送入模型一致）")
-    print("=" * 60)
+    print("\n" + brief)
     if args.no_rag:
-        print("（已跳过：--no-rag）")
-    elif not rag_meta:
-        print("（无命中或库为空）")
-    else:
-        for m in rag_meta:
-            if not isinstance(m, dict):
-                continue
-            print(
-                f"lineup_id={m.get('lineup_id', '')} | "
-                f"评级={m.get('quality', '')} | "
-                f"赛季={m.get('season', '')} | "
-                f"匹配分≈{m.get('match_score', 0)} | "
-                f"阵容名：{m.get('name', '')}"
-            )
-    print("\n" + "=" * 60)
-    print("【3. 棋子智库 RAG】命中（与送入模型一致）")
-    print("=" * 60)
-    if args.no_rag:
-        print("（已跳过：--no-rag）")
-    elif not chess_meta:
-        print("（无命中或库为空）")
-    else:
-        for m in chess_meta:
-            if not isinstance(m, dict):
-                continue
-            eqs = m.get("recommended_equips") or []
-            eq_show = (
-                "、".join(str(x) for x in eqs[:12])
-                if isinstance(eqs, list)
-                else ""
-            )
-            print(
-                f"{m.get('chess_name', '')} | 定位={m.get('slot_role', '')} | "
-                f"匹配分≈{m.get('match_score', 0)} | 推荐装：{eq_show or '（无）'}"
-            )
-    print("=" * 60)
+        print("\n（注：已使用 --no-rag，上方未含推荐阵容/目标棋子等扩展节。）")
 
 
 def run_coach_after_summary(
