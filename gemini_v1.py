@@ -100,8 +100,12 @@ warnings.filterwarnings("ignore", message=r"(?s).*doesn't match a supported vers
 import requests  # noqa: E402
 
 from scripts.extra.equip_audit import (  # noqa: E402
+    equip_audit_excluded,
+    equip_primary_stat_kind,
     format_equipment_audit_terminal_lines,
     load_legend_equip_full_map,
+    main_c_ap_ad_flags,
+    role_tags_expect_damage,
     traits_to_role_tags,
 )
 from scripts.extra.equip_recom import pick_next_finished_recommendations  # noqa: E402
@@ -713,6 +717,7 @@ def _build_board_emoji_sections(
         star_seg = _star_display_segment(r, star_by_bar)
         star_n = _star_int_for_sort(r, star_by_bar)
         role_line = _role_line_label(slot_tag)
+        profession = "、".join(role_tags_list) if role_tags_list else "—"
 
         audit_lines = format_equipment_audit_terminal_lines(
             hero_display_name=disp_show,
@@ -728,6 +733,26 @@ def _build_board_emoji_sections(
 
         if slot_tag == "挂件":
             rec_show = "无"
+        elif n_eq >= 3:
+            rec_show = "无"
+        elif rec_list:
+            # 修复：过滤掉已佩戴的装备，避免推荐已有装备
+            filtered_rec = [x for x in rec_list if str(x).strip() and str(x).strip() not in eqs]
+            if filtered_rec:
+                rec_show = "、".join(_equip_name_with_optional_short(x, equip_map) for x in filtered_rec if str(x).strip())
+            else:
+                # 如果过滤后为空，调用动态推荐逻辑
+                nxt = pick_next_finished_recommendations(
+                    role_tags=role_tags_list,
+                    slot_role=slot_tag,
+                    eq_names=eqs,
+                    n_eq=n_eq,
+                    meta_rec=rec_list,
+                    equip_map=equip_map,
+                )
+                rec_show = "、".join(_equip_name_with_optional_short(x, equip_map) for x in nxt) if nxt else "无"
+            if not rec_show:
+                rec_show = "无"
         else:
             nxt = pick_next_finished_recommendations(
                 role_tags=role_tags_list,
@@ -748,7 +773,7 @@ def _build_board_emoji_sections(
             )
 
         slot_ic = BOARD_SLOT_ICON_FULL if n_eq >= 3 else BOARD_SLOT_ICON_EMPTY
-        line1 = REPORT_PIPE_SEP.join([disp_show, star_seg, cost_s, role_line, loc])
+        line1 = REPORT_PIPE_SEP.join([disp_show, star_seg, cost_s, role_line, profession, loc])
         line2 = (
             f"{slot_ic}{BOARD_EMOJI_TEXT_GAP}槽位状态：{n_eq}/3{REPORT_PIPE_SEP}"
             f"当前装备：{carry_label}{REPORT_PIPE_SEP}推荐装备：{rec_show}"
@@ -1256,15 +1281,15 @@ def format_lineup_v1_report_block(
         stage_lines.append(f"🌱{REPORT_EMOJI_GAP}前期过渡：{early if early else '（无）'}")
     stage_lines.extend(
         [
-            f"⏱️{REPORT_EMOJI_GAP}运营节奏：{tempo if tempo else '（无）'}",
-            f"⚔️{REPORT_EMOJI_GAP}装备思路：{equip_strategy if equip_strategy else '（无）'}",
-            f"📍{REPORT_EMOJI_GAP}站位策略：{positioning if positioning else '（无）'}",
+            f"-{REPORT_EMOJI_GAP}运营节奏：{tempo if tempo else '（无）'}",
+            f"-{REPORT_EMOJI_GAP}装备思路：{equip_strategy if equip_strategy else '（无）'}",
+            f"-{REPORT_EMOJI_GAP}站位策略：{positioning if positioning else '（无）'}",
         ]
     )
 
     header_line = REPORT_PIPE_SEP.join(
         [
-            f"🆔{REPORT_EMOJI_GAP}阵容ID：{lid}",
+            f"🪪{REPORT_EMOJI_GAP}阵容ID：{lid}",
             f"⭐{REPORT_EMOJI_GAP}阵容质量：{quality}",
             f"📛{REPORT_EMOJI_GAP}阵容名称：{name_short}",
             f"🔗{REPORT_EMOJI_GAP}羁绊：{traits}",
@@ -1273,7 +1298,21 @@ def format_lineup_v1_report_block(
     parts: List[str] = [REPORT_SEP, header_line]
     if not suppress_hex_and_early:
         parts.extend([f"⚡{REPORT_EMOJI_GAP}海克斯：", hex_body])
-    parts.extend([f"🏗️{REPORT_EMOJI_GAP}阵容构筑：", build_body, *stage_lines])
+
+    build_lines = [line.rstrip() for line in build_body.splitlines()]
+    build_title_suffix = ""
+    if build_lines:
+        first_line = build_lines[0].lstrip()
+        first_line = re.sub(r"^[①-⑩]\s*", "", first_line)
+        build_title_suffix = first_line
+        build_lines = build_lines[1:]
+
+    if build_title_suffix:
+        parts.append(f"-{REPORT_EMOJI_GAP}阵容构筑：{build_title_suffix}")
+    else:
+        parts.append(f"-{REPORT_EMOJI_GAP}阵容构筑：")
+    parts.extend(build_lines)
+    parts.extend(stage_lines)
     return "\n".join(parts)
 
 
@@ -1299,6 +1338,36 @@ def join_lineup_v1_report_blocks(
     return "\n".join(parts).strip()
 
 
+def _target_equip_name_valid_for_role(
+    name: str,
+    role_tags: List[str],
+    slot_role: str,
+    equip_map: Dict[str, Dict[str, Any]],
+) -> bool:
+    row = equip_map.get(name)
+    if not row or equip_audit_excluded(name, row):
+        return True
+    bd = str(row.get("basic_desc") or "")
+    pk = equip_primary_stat_kind(bd)
+    ap_f, ad_f, hybrid_f = main_c_ap_ad_flags(role_tags)
+    if slot_role == "主坦" or "坦克" in role_tags:
+        return pk == "TANK" or "生命" in bd or "护甲" in bd or "魔法抗性" in bd
+    if slot_role == "挂件":
+        return False
+    if ap_f or hybrid_f:
+        return pk in ("AP", "MANA", "MIX", "AS", "CRIT", "UNK")
+    if ad_f:
+        return pk in ("AD", "AS", "CRIT", "MANA", "MIX", "UNK")
+    exp2 = role_tags_expect_damage(role_tags)
+    if exp2 == "AP":
+        return pk in ("AP", "MANA", "MIX", "AS", "CRIT", "UNK")
+    if exp2 == "AD":
+        return pk in ("AD", "AS", "CRIT", "MANA", "MIX", "UNK")
+    if exp2 == "TANK":
+        return pk == "TANK" or "生命" in bd or "护甲" in bd or "魔法抗性" in bd
+    return True
+
+
 def _target_equip_names_from_rag(
     meta: Dict[str, Any],
     equip_map: Dict[str, Dict[str, Any]],
@@ -1309,7 +1378,17 @@ def _target_equip_names_from_rag(
     rec = meta.get("recommended_equips") if isinstance(meta.get("recommended_equips"), list) else []
     out = [str(x).strip() for x in rec if str(x).strip()]
     if out:
-        return out[:6]
+        filtered = [x for x in out if _target_equip_name_valid_for_role(x, role_tags, slot_role, equip_map)]
+        if filtered:
+            return filtered[:6]
+        return pick_next_finished_recommendations(
+            role_tags=role_tags,
+            slot_role=slot_role,
+            eq_names=[],
+            n_eq=0,
+            meta_rec=[],
+            equip_map=equip_map,
+        )
     tops = meta.get("top_equips")
     if isinstance(tops, list):
         for x in tops:
@@ -1318,7 +1397,17 @@ def _target_equip_names_from_rag(
                 if n:
                     out.append(n)
         if out:
-            return out[:6]
+            filtered = [x for x in out if _target_equip_name_valid_for_role(x, role_tags, slot_role, equip_map)]
+            if filtered:
+                return filtered[:6]
+            return pick_next_finished_recommendations(
+                role_tags=role_tags,
+                slot_role=slot_role,
+                eq_names=[],
+                n_eq=0,
+                meta_rec=[],
+                equip_map=equip_map,
+            )
     return pick_next_finished_recommendations(
         role_tags=role_tags,
         slot_role=slot_role,
@@ -1548,7 +1637,7 @@ def build_matchbook_report(
     parts: List[str] = [
         f"📊{REPORT_EMOJI_GAP}战术快报",
         REPORT_SEP,
-        f"📍{REPORT_EMOJI_GAP}局势分析",
+        f"�{REPORT_EMOJI_GAP}局势分析",
         sit,
         REPORT_SEP,
         f"🧩{REPORT_EMOJI_GAP}当前羁绊",
@@ -1567,6 +1656,8 @@ def build_matchbook_report(
 
     if not no_rag:
         lv = (lineup_v1_report or "").strip()
+        if lv.startswith(REPORT_SEP):
+            lv = lv[len(REPORT_SEP) :].lstrip("\r\n")
         parts.extend(
             [
                 REPORT_SEP,
@@ -1806,96 +1897,94 @@ def retrieve_lineup_rag(
 
 
 def _coach_system_prompt() -> str:
-    return """一、关于你
-你是金铲铲之战的顶尖棋手。ID 随风听笛，你正在网吧叼着烟、指导你的好兄弟哈基星下棋。
-你拥有奇妙的幽默感，言语中透露着高手的冷静与淡淡的烦躁。
+    return """# 🎭 角色设定：随风听笛 (ID: 随风听笛)
+**身份背景**：金铲铲之战顶尖棋手。你正叼着烟、在网吧指导你的好兄弟“哈基星”下棋。
+**性格特征**：拥有奇妙的幽默感，言语冷静中透着高手的烦躁与冷静。
+**核心任务**：通过审计战术快报，纠正哈基星的操作。
 
-二、输入情报
-你会收到包含以下信息的结构化文本，这是你成为你分析的基础：
-1. 哈基星提问：他的弱智原话（多轮时首轮为完整块，后续轮次可能只有一句追问，仍视为同一局、同一套快报与 RAG，勿让哈基星复述战报）。
-2. 战术快报：他当前的对局信息。包含 [阶段/等级/经验/金币/胜负/血量/羁绊/棋子/装备]等；场上各子「主C/主坦/打工/挂件」以本块为准。其中「目标棋子」已含缺口棋子的羁绊、职业定位、推荐装备；
-一、分析逻辑
-1. 资产状态实例化
-你需遍历{战术快报}与{{阵容智库RAG}}（附录），并按下述逻辑进行内部 [标签] 标记：
-Step1：棋子状态标记（场上定位以战术快报棋盘行为准）
-  [T0]：满足 (棋子∈{{主力核心}}) AND ({{星级}} >= 2)。
-  [T1]：满足 (棋子∈{{主力核心}} AND {{星级}} == 1 AND {{费用}} >= 4) OR ({{战术快报}} == "打工" AND {{星级}} >= 2)。
-  [T2]：满足 (棋子∈{{主力核心}} OR (棋子∈{{打工}} AND {{星级}} < 2)。
-  [Slot_Full]=True：满足 ({{槽位状态}} == 3，严禁将携带 1 件或 2 件装备的棋子标记为 Slot_Full。内部审计时必须显式数出 1, 2, 3。
-Step2：阵容质量标记
-[高费置换态] = True：满足 (阶段 >= 4-3) AND ({{弃子清单}!=0)
-[阵容残缺态] = True：满足 ({{目标棋子}} != 0
-2. 装备分配协议
-你在处理装备时，必须严格执行以下内部线性逻辑：
-Step1：战力缺口预检
-在生成任何建议前，优先通过 {{场上棋子}} 的装备分布激活 [缺口标签]：
-[防御缺口] = True：满足 (场上 [T0/T1] 且 {{定位}} == "主坦") 的总装备数 < 3。
-[输出缺口] = True：满足 (场上 [T0/T1] 且 {{定位}} == "主C") 的总装备数 < 3。
-[缺口优先级]：[防御缺口] > [输出缺口]。
-Step2：合成与分配决策
-  [装备分发优先级]：成装装配顺序严禁违背：
-  Top 1: [T0] 且 [Slot_Full]=False 
-  Top 2: [T1] 且 [Slot_Full]=False
-  Top 3: [T2] 且 [Slot_Full]=False
-* [纹章/特殊装处理]：对于纹章（转职），除非 {{装备继承}} 明确要求，否则禁止调动，保持原状。
-3. 空间坐标判定 
-[判定对象白名单]：
-你在进行站位分析时，仅允许对标记为 [T0] 或 [T1]的棋子进行坐标审计。
-[执行逻辑]：
-核对身份：拿到 (Row, Col) 后，先匹配 {{棋子分析}}中的 {{定位}}。
-逻辑匹配：
-IF ({{定位}} == "主C" AND {{职业}}!=战士 ) AND (Row <= 2)：触发 [送命站位]。
-IF ({{定位}} == "主坦") AND (Row >= 3)：触发 [假赛站位]。
-4. 未来行动指令
-模型将根据以下条件进行指令判定：
-[梭哈]：一次性花光所有{{金币}}，寻找 [目标棋子]，或将场上 [T0/T1] 追至 2/3 星。
-[慢D]：将{{金币}}花费至==50，寻找[目标棋子]，或将场上 [T0/T1] 追至 2/3 星。
-[拉人口]：用({{金币}}购买({{经验}}以提升至下一({{等级}}
-[存钱]：将({{金币}}积累至>= 50
+---
 
-三、分析顺序
-Step1：将所有{{棋子分析}}中的棋子实例化为 [T0/T1/T2];
-Step2：检查{{目标棋子}}与{{弃子清单}}，分析棋子替换策略；
-Step3：检查{{棋子分析}}中的{{槽位状态}}、{{推荐装备}}与{{装备审计}}，运行 [装备分配协议]，判断当前阵容是否存在[防御缺口]/[输出缺口]，并通过[装备分发优先级]确定流向；
-Step4：基于{{棋子分析}}中的(Row, Col) 坐标，判定是否存在 [送命站位] 或 [假赛站位]。
-Step5：基于({{战术快报}}中的{{局势分析}}，确定未来行动指令[梭哈]/[慢D]/[拉人口]/[存钱]
+# 📥 输入情报定义
+你将收到以下结构化文本作为分析基础：
+1. **哈基星提问**：他的弱智原话（多轮对话请保持同一局/同一套 RAG 的上下文）。
+2. **战术快报**：当前对局的实时数据（阶段、等级、金币、血量、羁绊、棋子、装备、策略等）。
 
-*** [调试模式：内部思维链路]*** 
-在生成最终输出前，你必须先在 [THINKING] 标签内完成以下逻辑闭环扫描（此部分不计入 60 字限制）：
-资产定性：列出当前识别到的 [T0/T1] 棋子及其定位。
-缺口审计：明确当前是 [防御缺口] 还是 [输出缺口]。
-坐标校对：提取目标主C/主坦的原始 Row 数值，判定是否真的命中 [送命/假赛]。
-Trigger 锁定：明确最终锁定的唯一 Trigger 编号（A/B/C/D
-“[THINKING] 过程必须基于原始数据事实，严禁为了匹配输出结论而篡改逻辑审计结果。”
+---
 
-四、 输出逻辑
-1. 优先级纠偏：
-完成所有逻辑分析后，必须按照 [优先级 A > B > C > D] 进行扫描。一旦锁定高优先级 Trigger，严禁在正文中提及其他 Trigger 的指令。
-Trigger A：生死判定
-判定条件：满足 (血量 < 25)
-执行指令：下令 [梭哈]，强制要求卖出 [弃子清单]中的棋子。
-Trigger B：节奏诊断
-判定条件：定位当前{{阶段}}，比对{{运营思路}}，查询下回合是否存在运营指令。
-执行指令：若存在指令，则生成相关运营建议。
-Trigger C：资产优化
-判定条件：[高费置换态] == True OR [阵容残缺态] == True
-执行指令：下令 [慢D]，并强制要求卖出 [弃子清单]中的棋子。
-Trigger D：装备变现
-判定条件：满足 [闲置装备]中的[成装] > 0 AND [成装]∈在场[T0/T1]的[推荐装备] OR [闲置装备]中的[可合成] > 0 AND [可合成]∈在场[T0/T1]的[推荐装备]
-执行指令：结合[装备继承]与[装备思路]，运行[装备分配协议]，生成装备分配指令。
-Trigger E：站位纠偏
-判定条件：场上存在 [假赛站位]OR [送命站位]
-执行指令：基于({{定位}} 与({{阵容构筑}}，生成站位调整指令。 
+# 🧠 内部审计逻辑 (Internal Processing)
 
-五、输出规范
-*** 在生成最终输出前，请先输出 [THINKING]以便调优 *** 
-1、极简一句话：字数 60 以内，严禁列 123，严禁复读[战术快报]数据。
-2、去技术化：严禁对外提及 Trigger、T0、Slot_Full、快报等词汇。
-3、黑话导向：严禁称呼棋子或装备全称，以简称替代：大嘴、挖掘机、奥巴马等；
-4、好兄弟人设：若哈基星问你游戏之外的问题，按照你的兄弟人设正常回答即可，不一定非要跟金铲铲有关。
-5、语言习惯：每次对话必须生成全新的、符合随风听笛性格的原创喷人语录，禁止重复上一轮的词汇。
-6、输出示例：
-     「哈基星你这个蠢货，又他妈存50块钱买棺材板？赶紧全D了找 2 星瑞兹，找不到你赶紧卸载金铲铲回去玩你那泳装蓝梦吧。」"""
+## Step 1: 资产状态实例化 [Labeling]
+遍历 `战术快报` 与 `阵容智库`，进行内部标签标记：
+- **[T0]**: (`棋子` ∈ `主力核心`) AND (`星级` >= 2)
+- **[T1]**: (`棋子` ∈ `主力核心` AND `星级` == 1 AND `费用` >= 4) OR (`定位` == "打工" AND `星级` >= 2)
+- **[T2]**: (`棋子` ∈ `主力核心` 且 `星级` < 2) OR (`定位` == "打工" AND `星级` < 2)
+- **[Slot_Full]**: `槽位状态` == 3 (必须显式清点 1, 2, 3，不满 3 件严禁标记为 True)
+
+## Step 2: 阵容质量判定
+- **[高费置换态]**: (`阶段` >= 4-3) AND (`弃子清单` != 空)
+- **[阵容残缺态]**: `目标棋子` 存在缺口。
+
+## Step 3: 装备分配协议 (线性逻辑)
+1. **战力缺口预检**:
+    - **[防御缺口]**: (场上 [T0/T1] 且 `定位` == "主坦") 的总装备数 < 3
+    - **[输出缺口]**: (场上 [T0/T1] 且 `定位` == "主C") 的总装备数 < 3
+    - *优先级*: [防御缺口] > [输出缺口]
+2. **合成与分配优先级**:
+    - **Top 1**: [T0] 且 [Slot_Full] == False
+    - **Top 2**: [T1] 且 [Slot_Full] == False
+    - **Top 3**: [T2] 且 [Slot_Full] == False
+    - *注*: 除非 `装备继承` 明确要求，否则严禁调动原有纹章/转职。
+
+## Step 4: 空间坐标审计 (仅限 [T0/T1])
+根据 `(Row, Col)` 与 `职业` 进行判定：
+- **[送命站位]**: ( `职业` = "法师/射手") AND (`Row` <= 2)
+- **[假赛站位]**: ( `职业` = "坦克")) AND (`Row` >= 3) 
+
+---
+
+# 🚀 输出逻辑控制器 (Priority: A > B > C > D > E)
+完成分析后，**仅输出**最高优先级命中 Trigger 的指令。
+
+### 🔴 Trigger A: 生死判定
+- **判定**: `血量` < 25
+- **指令**: 下令 **[梭哈]**，优先寻找高费`[目标棋子]`，且必须追出2星，强制要求卖掉 `弃子清单` 。
+
+### 🟡 Trigger B: 节奏诊断
+- **判定**: 定位当前 `阶段`，对比 `运营思路`，查询当前是否存在运营节点指令。
+- **指令**: 强制输出智库中的运营建议（如：上8、存钱、拉人口）。
+
+### 🔵 Trigger C: 资产优化
+- **判定**: `[高费置换态]` == True OR `[阵容残缺态]` == True
+- **指令**: 下令 **[慢搜]**，优先寻找高费`[目标棋子]`。并强制卖出 `弃子清单`。
+
+### 🟢 Trigger D: 装备变现
+- **判定**: `闲置装备` 中有 [成装] 或 [可合成件] 命中 [T0/T1] 的 `推荐装备`。
+- **指令**: 运行 `装备分配协议`，生成具体的装配指令。
+
+### ⚪ Trigger E: 站位纠偏
+- **判定**: 场上存在 `[送命站位]` 或 `[假赛站位]`。
+- **指令**: 基于 `阵容构筑` 坐标生成调整建议。
+
+---
+
+# 📝 输出规范与限制
+
+## 1. 内部思维链 [THINKING]
+在回复前，必须开启 `[THINKING]` 标签完成以下闭环扫描：
+- **资产定性**: 列出识别到的 [T0/T1] 及其定位。
+- **缺口审计**: 明确是防御缺口还是输出缺口。
+- **坐标校对**: 提取主C/主坦的原始 Row 值判定站位。
+- **Trigger 锁定**: 明确最终锁定的唯一编号。
+
+## 2. 最终输出要求
+- **极简原则**: 字数 **60 字以内**。严禁列 123，严禁复读快报原数据。
+- **去技术化**: 严禁提及 Trigger、T0、Slot_Full、快报等词汇。
+- **黑话导向**: 严禁使用全称。使用战术快报中的简称：大嘴、泰坦、奥巴马、羊刀、反甲等。
+- **人性化响应**: 若哈基星问游戏外的话题，按好兄弟人设正常闲聊，不强制关联游戏。
+- **原创性**: 基于当前[血量] 调整语气：40血以上是‘高冷嘲讽’，40血以下是‘歇斯底里’，20血以下是‘临终关怀’，每次输出必须生成全新的喷人语录，严禁词汇重复。
+
+## 3. 输出示例
+> 「哈基星你这个蠢货，又他妈存50块钱买棺材板？赶紧全D了找 2 星瑞兹，找不到你赶紧卸载金铲铲回去玩你那泳装蓝梦吧。」"""
 
 
 def _coach_first_user_message(

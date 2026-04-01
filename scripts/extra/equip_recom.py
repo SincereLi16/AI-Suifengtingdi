@@ -309,6 +309,11 @@ def pick_next_finished_recommendations(
     need = max(0, 3 - n_eq)
     worn = set(eq_names)
     pool = [str(x).strip() for x in meta_rec if str(x).strip()]
+    
+    # 修复：当 meta_rec 为空时，使用 equip_map 中的所有装备作为候选池
+    # 这样推荐逻辑才能基于当前已有装备的属性，从全局装备库中筛选出符合需求的装备
+    if not pool and equip_map:
+        pool = [str(name).strip() for name in equip_map.keys() if str(name).strip()]
 
     ap_f, ad_f, hybrid_f = main_c_ap_ad_flags(role_tags)
     ap_carry = ap_f or hybrid_f
