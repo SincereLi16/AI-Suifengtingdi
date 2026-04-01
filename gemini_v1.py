@@ -144,6 +144,9 @@ def _openrouter_chat_completion(
     model: str,
     temperature: float = 0.35,
     timeout_s: float = 120.0,
+    max_tokens: Optional[int] = None,
+    stream_output: bool = False,
+    on_stream_chunk: Optional[Callable[[str], None]] = None,
 ) -> str:
     base, key, _ = _openrouter_env()
     if not key:
@@ -163,15 +166,22 @@ def _openrouter_chat_completion(
         "HTTP-Referer": referer,
         "X-Title": app_title,
     }
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if max_tokens is not None and int(max_tokens) > 0:
+        payload["max_tokens"] = int(max_tokens)
+    if stream_output:
+        payload["stream"] = True
+
     r = requests.post(
         url,
         headers=headers,
-        json={
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-        },
+        json=payload,
         timeout=timeout_s,
+        stream=bool(stream_output),
     )
     if not r.ok:
         body = (r.text or "")[:800]
@@ -184,6 +194,46 @@ def _openrouter_chat_completion(
             )
             raise RuntimeError(hint)
         raise RuntimeError(f"OpenRouter HTTP {r.status_code}: {body}")
+    if stream_output:
+        # 流式场景固定按 UTF-8 解码，避免 Windows 终端出现乱码。
+        r.encoding = "utf-8"
+        parts: List[str] = []
+        for raw in r.iter_lines(decode_unicode=False):
+            if not raw:
+                continue
+            if isinstance(raw, (bytes, bytearray)):
+                line = raw.decode("utf-8", errors="replace").strip()
+            else:
+                line = str(raw).strip()
+            if not line.startswith("data:"):
+                continue
+            data_s = line[5:].strip()
+            if not data_s or data_s == "[DONE]":
+                continue
+            try:
+                evt = json.loads(data_s)
+            except Exception:
+                continue
+            choices = evt.get("choices") or []
+            if not choices:
+                continue
+            delta = (choices[0] or {}).get("delta") or {}
+            content = delta.get("content")
+            chunk = ""
+            if isinstance(content, str):
+                chunk = content
+            elif isinstance(content, list):
+                chunk = "".join(
+                    p.get("text", "") if isinstance(p, dict) else str(p)
+                    for p in content
+                )
+            if not chunk:
+                continue
+            parts.append(chunk)
+            if callable(on_stream_chunk):
+                on_stream_chunk(chunk)
+        return "".join(parts).strip()
+
     data = r.json()
     choices = data.get("choices") or []
     if not choices:
@@ -837,12 +887,12 @@ def _craftable_from_component_counts(
 
 def _format_equip_column_block(summary: Dict[str, Any]) -> str:
     """
-    左侧装备栏：散件 / 滞留成装 / 可合成装备（由当前散件 + legend 合成表推导）。
+    左侧装备栏：散件 / 成装 / 可合成装备（由当前散件 + legend 合成表推导）。
     """
     ec = (summary.get("modules") or {}).get("equip_column") or {}
     m = ec.get("matches") if isinstance(ec, dict) else None
     if not isinstance(m, list) or not m:
-        return "散件：无\n滞留成装：无\n可合成装备：无"
+        return "散件：无\n成装：无\n可合成装备：无"
     stems: List[str] = []
     for x in m:
         if isinstance(x, dict):
@@ -850,7 +900,7 @@ def _format_equip_column_block(summary: Dict[str, Any]) -> str:
             if n:
                 stems.append(n)
     if not stems:
-        return "散件：无\n滞留成装：无\n可合成装备：无"
+        return "散件：无\n成装：无\n可合成装备：无"
 
     bases, recipes = _get_legend_equip_tables()
     san: List[str] = []
@@ -869,7 +919,7 @@ def _format_equip_column_block(summary: Dict[str, Any]) -> str:
 
     return (
         f"散件：{_join(san)}\n"
-        f"滞留成装：{_join(cheng)}\n"
+        f"成装：{_join(cheng)}\n"
         f"可合成装备：{_join(craft_lines)}"
     )
 
@@ -879,7 +929,7 @@ def _format_equip_column_emoji(summary: Dict[str, Any]) -> str:
     ec = (summary.get("modules") or {}).get("equip_column") or {}
     m = ec.get("matches") if isinstance(ec, dict) else None
     if not isinstance(m, list) or not m:
-        return f"- 滞留成装: 无\n- 散件状态: 无{REPORT_PIPE_SEP}可合成: 无"
+        return f"- 成装: 无\n- 散件状态: 无{REPORT_PIPE_SEP}可合成: 无"
     stems: List[str] = []
     for x in m:
         if isinstance(x, dict):
@@ -887,7 +937,7 @@ def _format_equip_column_emoji(summary: Dict[str, Any]) -> str:
             if n:
                 stems.append(n)
     if not stems:
-        return f"- 滞留成装: 无\n- 散件状态: 无{REPORT_PIPE_SEP}可合成: 无"
+        return f"- 成装: 无\n- 散件状态: 无{REPORT_PIPE_SEP}可合成: 无"
 
     bases, recipes = _get_legend_equip_tables()
     san: List[str] = []
@@ -908,7 +958,7 @@ def _format_equip_column_emoji(summary: Dict[str, Any]) -> str:
     san_s = _join(san)
     craft_s = _join(craft_lines)
     return (
-        f"- 滞留成装: {cheng_s}\n"
+        f"- 成装: {cheng_s}\n"
         f"- 散件状态: {san_s}{REPORT_PIPE_SEP}可合成: {craft_s}"
     )
 
@@ -1200,13 +1250,14 @@ def build_matchbook_report(
         f"🧩{REPORT_EMOJI_GAP}当前羁绊",
         trait_block,
         REPORT_SEP,
+        f"🧠{REPORT_EMOJI_GAP}棋子分析",
         f"🔥{REPORT_EMOJI_GAP}主力核心",
         core_txt,
         REPORT_SEP,
         f"🔧{REPORT_EMOJI_GAP}打工挂件",
         work_txt,
         REPORT_SEP,
-        f"🎒{REPORT_EMOJI_GAP}左侧装备",
+        f"🎒{REPORT_EMOJI_GAP}闲置装备",
         _format_equip_column_emoji(summary),
     ]
 
@@ -1407,27 +1458,19 @@ def _coach_system_prompt() -> str:
 二、输入情报
 你会收到包含以下信息的结构化文本，这是你成为你分析的基础：
 1. 哈基星提问：他的弱智原话（多轮时首轮为完整块，后续轮次可能只有一句追问，仍视为同一局、同一套快报与 RAG，勿让哈基星复述战报）。
-2. 战术快报：他当前的对局信息。包含 [阶段/等级/经验/金币/胜负/血量/羁绊/棋子/装备]等；场上各子「主C/主坦/打工仔/挂件」以本块为准。其中「🎯 目标棋子」已含缺口棋子的羁绊、职业倾向、推荐装备（来自棋子库）；「♻️ 弃子清单」「🔗 装备继承」与 Top1 对齐。
-3. 阵容智库 (RAG)：附录中的攻略长文，用于运营/站位/出装细节。
+2. 战术快报：他当前的对局信息。包含 [阶段/等级/经验/金币/胜负/血量/羁绊/棋子/装备]等；场上各子「主C/主坦/打工/挂件」以本块为准。其中「目标棋子」已含缺口棋子的羁绊、职业定位、推荐装备；
 
 一、分析逻辑
 1. 资产状态实例化
 你需遍历{战术快报}与{{阵容智库RAG}}（附录），并按下述逻辑进行内部 [标签] 标记：
 Step1：棋子状态标记（场上定位以战术快报棋盘行为准）
-  [T0 - 真神]：满足 ({{战术快报/定位}} == "主C" 或 "主坦") AND ({{战术快报/星级}} >= 2)。
-  [T1 - 大腿]：满足 ({{战术快报/定位}} == "主C" 或 "主坦" AND {{战术快报/星级}} == 1 AND {{费用}} >= 4) OR ({{战术快报/定位}} == "打工仔" AND {{星级}} >= 2)。
-  [T2 - 挂件]：满足 (阶段 >= 5-1) AND (不属于 {{阵容智库}} 核心羁绊) AND (装备数 == 0) AND (星级 < 2) AND (费用 <= 3)。
-  [Slot_Full] 判定：必须满足 Len(棋子/装备栏列表) == 3，严禁将携带 1 件或 2 件装备的棋子标记为 Slot_Full。内部审计时必须显式数出 1, 2, 3。
-
+  [T0]：满足 (棋子∈{{主力核心}}) AND ({{星级}} >= 2)。
+  [T1]：满足 (棋子∈{{主力核心}} AND {{星级}} == 1 AND {{费用}} >= 4) OR ({{战术快报}} == "打工" AND {{星级}} >= 2)。
+  [T2]：满足 (棋子∈{{主力核心}} OR (棋子∈{{打工}} AND {{星级}} < 2)。
+  [Slot_Full]=True：满足 ({{槽位状态}} == 3，严禁将携带 1 件或 2 件装备的棋子标记为 Slot_Full。内部审计时必须显式数出 1, 2, 3。
 Step2：阵容质量标记
-[高费置换态] = True：满足 (阶段 >= 4-3) AND (场上存在 [T2-挂件])
-[阵容残缺态] = True：满足 ({{阵容智库}} 核心羁绊棋子) ∉ {{场上棋子}}
-
-Step3：阵容提升分析
-在激活 [阵容残缺态]时，你需检索[核心羁绊棋子]：
-[核心羁绊棋子]： {{阵容智库RAG}} 中标记为“核心/羁绊关键”但 {{场上棋子}} 中缺失的棋子名称。
-在激活 [高费置换态]时，你需检索[可替高费棋子]：
-[可替高费棋子]：对局情报「🎯 目标棋子」中列出的高费缺口、或阵容攻略明示的高费核心，且当前场上尚未上场（勿与战术快报已有子重复）。
+[高费置换态] = True：满足 (阶段 >= 4-3) AND (场上存在 [T2])
+[阵容残缺态] = True：满足 ({{目标棋子}} != {{场上棋子}}
 
 2. 装备分配协议
 你在处理装备时，必须严格执行以下内部线性逻辑：
@@ -1435,25 +1478,19 @@ Step1：战力缺口预检
 在生成任何建议前，优先通过 {{场上棋子}} 的装备分布激活 [缺口标签]：
 [防御缺口] = True：满足 (场上 [T0/T1] 且 {{定位}} == "主坦") 的总装备数 < 3。
 [输出缺口] = True：满足 (场上 [T0/T1] 且 {{定位}} == "主C") 的总装备数 < 3。
-[成装滞留] = True：满足 {{战术快报/左侧装备栏}}有成装，且场上[T0/T1] Slot_Full = False）
 [缺口优先级]：[防御缺口] > [输出缺口]。
-
 Step2：合成与分配决策
-  [必合成装]：({{战术快报/可合成装备}}) ∩ ({{阵容智库 RAG}} 文本中的成型出装/装备思路)
-  [通用成装]：IF (必合成装==0) -> 依据 [战力天平审计] 结论，从 {{可合成装备}} 中选取提升最大的单品。
-* [通用成装] 合成优先级：[防御缺口]＞[输出缺口]
-  [装备分发优先级]：成装挂载顺序严禁违背：
-  Top 1: [T0 - 真神] (且 [Slot_Full] == False)
-  Top 2: [T1 - 大腿] (且 [Slot_Full] == False)
-  Top 3: {{战术快报/定位}} == "挂件"
-  Top 4: {{战术快报/定位}} == "打工仔"
-* [纹章/特殊装处理]：对于纹章（转职），除非 {{阵容智库}} 明确要求，否则禁止建议调动，保持原状。
+  [装备分发优先级]：成装装配顺序严禁违背：
+  Top 1: [T0] (且 {{槽位状态}}!=3
+  Top 2: [T1] (且 {{槽位状态}}!=3
+  Top 3: [T2] (且 {{槽位状态}}!=3
+* [纹章/特殊装处理]：对于纹章（转职），除非 {{装备继承}} 明确要求，否则禁止调动，保持原状。
 
 3. 空间坐标判定 
 [判定对象白名单]：
 你在进行站位分析时，仅允许对标记为 [T0] 或 [T1]的棋子进行坐标审计。
 [执行逻辑]：
-核对身份：拿到 (Row, Col) 后，先对位 {{战术快报}} 棋盘行中的 [定位]。
+核对身份：拿到 (Row, Col) 后，先匹配 {{棋子分析}}中的[定位]。
 逻辑匹配：
 IF (定位 == "主C") AND (Row <= 2)：触发 [送命站位]。
 IF (定位 == "主坦") AND (Row >= 3)：触发 [假赛站位]。
@@ -1461,45 +1498,32 @@ IF (定位 == "主坦") AND (Row >= 3)：触发 [假赛站位]。
 
 4. 未来行动指令
 模型将根据以下条件进行指令判定：
-[梭哈]：一次性花光所有{{金币}}，寻找 [核心羁绊棋子] / [可替高费棋子]，或将场上 [T0/T1] 追至 2/3 星。
-[慢D]：将{{金币}}花费至==50，寻找 [核心羁绊棋子] / [可替高费棋子]，或将场上 [T0/T1] 追至 2/3 星。
+[梭哈]：一次性花光所有{{金币}}，寻找 [目标棋子]，或将场上 [T0/T1] 追至 2/3 星。
+[慢D]：将{{金币}}花费至==50，寻找[目标棋子]，或将场上 [T0/T1] 追至 2/3 星。
 [拉人口]：用({{金币}}购买({{经验}}以提升至下一({{等级}}
 [存钱]：将({{金币}}积累至>= 50
 
 二、分析顺序
-Step1：将所有棋子实例化为 [T0/T1/T2]，并标记 [Slot_Full]，并检查阵容是否处于[高费置换态]/[阵容残缺态]
-Step2：运行 [装备分配协议]，判断当前阵容是否存在[防御缺口] /[输出缺口]，检查是否存在[必合成装]/[通用成装]/[成装滞留]，并通过[装备分发优先级]确定流向；
-Step3：根据({{战术快报}}中的条件约束，确定未来行动指令[梭哈]/[慢D]/[拉人口]/[存钱]
-Step4：计算 (Row, Col) 坐标，判定是否存在 [送命站位] 或 [假赛站位]。
-
-*** [调试模式：内部思维链路]*** 
-在生成最终输出前，你必须先在 [THINKING] 标签内完成以下逻辑闭环扫描（此部分不计入 60 字限制）：
-资产定性：列出当前识别到的 [T0/T1] 棋子及其定位。
-缺口审计：明确当前是 [防御缺口] 还是 [输出缺口]。
-坐标校对：提取目标主C/主坦的原始 Row 数值，判定是否真的命中 [送命/假赛]。
-Trigger 锁定：明确最终锁定的唯一 Trigger 编号（A/B/C/D
-“[THINKING] 过程必须基于原始数据事实，严禁为了匹配输出结论而篡改逻辑审计结果。”
-
+Step1：将所有{{棋子分析}}中的棋子实例化为 [T0/T1/T2];
+Step2：检查{{目标棋子}}与{{弃子清单}}，分析棋子替换策略；
+Step3：检查{{棋子分析}}中的{{槽位状态}}、{{推荐装备}}与{{装备审计}}，运行 [装备分配协议]，判断当前阵容是否存在[防御缺口]/[输出缺口]，并通过[装备分发优先级]确定流向；
+Step4：基于{{棋子分析}}中的(Row, Col) 坐标，判定是否存在 [送命站位] 或 [假赛站位]。
+Step5：基于({{战术快报}}中的{{局势分析}}，确定未来行动指令[梭哈]/[慢D]/[拉人口]/[存钱]
 
 三、 输出逻辑
 1. 优先级纠偏：
 完成所有逻辑分析后，必须按照 [优先级 A > B > C > D] 进行扫描。一旦命中高优先级条件，立即截断后续思考，锁定该意图为唯一输出。
 Trigger A：节奏生死
 判定条件：满足 (血量 < 25) OR (血量 < 40 AND 阶段 >= 5-1) 
-执行指令：下令 [梭哈]，并强制要求卖掉场上 [T2-挂件] 为即将搜到的卡腾位。
+执行指令：下令 [梭哈]，并强制要求卖掉场上 [T2]。
 Trigger B：资产优化
 判定条件：[高费置换态] == True OR [阵容残缺态] == True
-执行指令：下令 [慢D]，并强制要求卖掉场上 [T2-挂件] 为即将搜到的卡腾位。
-* [严格准入]：严禁推荐任何未出现在 {{对局情报}}、{{阵容攻略原文}} 中已分析的棋子（除非为当前阶段合理的通用低费过渡）。
+执行指令：下令 [慢D]，并强制要求卖出 [T2]。
+* [严格准入]：严禁推荐任何未出现在 {{目标棋子}}、{{阵容智库RAG}} 中的棋子。
 Trigger C：装备变现
-判定条件：满足 [成装滞留] > 0 OR [必合成装] > 0 OR(散件栏数量 >= 2 AND 有[通用成装]推荐)。
-执行指令：依据 [装备分配协议] 与 [防御缺口]/[输出缺口] 下达合成与挂载指令。
-Trigger D：细节纠偏
-判定条件：命中 [送命站位] OR [假赛站位]。
-执行指令：修正 Row 坐标至合规范围。
+判定条件：满足 [闲置装备]中的[成装] > 0 AND [T0/T1]的[Slot_Full]=False OR [闲置装备]中的[可合成] > 0 AND  [T0/T1]的[Slot_Full]=False
 
 四、输出规范
-*** 在生成最终输出前，请先输出 [THINKING]以便调优 *** 
 1、极简一句话：字数 60 以内，严禁列 123，严禁复读[战术快报]数据。
 2、去技术化：严禁对外提及 Trigger、T0、Slot_Full、快报等词汇。
 3、黑话导向：严禁称呼棋子或装备全称，以简称替代：大嘴、挖掘机、奥巴马等；
@@ -1536,6 +1560,8 @@ def coach_chat_complete_turn(
     *,
     model: str | None = None,
     temperature: float = 0.35,
+    stream_output: bool = False,
+    on_stream_chunk: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
     多轮中的一步：chat_hist 须为 OpenAI 式 messages（不含 system），且以 user 开头、user/assistant 严格交替。
@@ -1565,6 +1591,8 @@ def coach_chat_complete_turn(
         messages=[{"role": "system", "content": sys_p}, *chat_hist],
         model=om,
         temperature=temperature,
+        stream_output=stream_output,
+        on_stream_chunk=on_stream_chunk,
     )
 
 
@@ -1867,6 +1895,7 @@ def run_coach_after_summary(
     log_prefix: str = "gemini_v1",
     coach_bundle: Optional[Dict[str, Any]] = None,
     skip_bundle_preview_print: bool = False,
+    on_answer: Optional[Callable[[str, int], None]] = None,
 ) -> None:
     """从已定位的 *_summary.json 起：RAG、预览、多轮教练对话（可注入追问输入函数，供 gemini_v2 语音等）。"""
     if coach_bundle is None:
@@ -1906,19 +1935,57 @@ def run_coach_after_summary(
     while True:
         turn += 1
         print(f"\n正在请求 LLM（第 {turn} 轮）…\n")
+        stream_now = bool(sys.stdout.isatty())
+        if stream_now:
+            print("【随风听笛说】\n")
         t_ll0 = time.perf_counter()
-        answer = coach_chat_complete_turn(chat_hist)
+        first_chunk_ts: List[Optional[float]] = [None]
+        flush_ts: List[float] = [t_ll0]
+        stream_buf: List[str] = []
+
+        def _on_chunk(chunk: str) -> None:
+            now = time.perf_counter()
+            if first_chunk_ts[0] is None:
+                first_chunk_ts[0] = now
+            stream_buf.append(chunk)
+            # 0.2s 刷新一次，避免终端刷屏过快
+            if stream_now and (now - flush_ts[0] >= 0.2):
+                out = "".join(stream_buf)
+                stream_buf.clear()
+                print(out, end="", flush=True)
+                flush_ts[0] = now
+
+        answer = coach_chat_complete_turn(
+            chat_hist,
+            stream_output=stream_now,
+            on_stream_chunk=_on_chunk if stream_now else None,
+        )
         t_ll1 = time.perf_counter()
-        round_sec = t_ll1 - t_ll0
+
+        if stream_now and stream_buf:
+            print("".join(stream_buf), end="", flush=True)
+            stream_buf.clear()
+            print()
+
+        if first_chunk_ts[0] is not None:
+            round_sec = t_ll1 - first_chunk_ts[0]
+        else:
+            round_sec = t_ll1 - t_ll0
         ll_total += round_sec
         print(
             f"[{log_prefix}] 第 {turn} 轮模型响应耗时: {round_sec:.2f}s",
             flush=True,
         )
 
-        print("\n【随风听笛说】\n")
-        print(answer)
-        print()
+        if not stream_now:
+            print("\n【随风听笛说】\n")
+            print(answer)
+            print()
+        if on_answer is not None:
+            try:
+                on_answer(answer, turn)
+            except Exception as e:
+                print(f"[{log_prefix}] TTS 回调失败（已忽略）: {e}", flush=True)
         if not sys.stdin.isatty():
             break
         print(

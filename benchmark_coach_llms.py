@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import requests
+
 REPO_ROOT = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -32,19 +34,16 @@ import gemini_v1 as gv  # noqa: E402
 
 DEFAULT_SUMMARY_DIR = REPO_ROOT / "runs" / "battle_pipeline_v3_out"
 
-# (展示名, OpenRouter model id) —— id 以 OpenRouter 控制台为准，可随时改 DEFAULT_MODEL_ROWS
+# (展示名, OpenRouter model id)
 DEFAULT_MODEL_ROWS: List[Tuple[str, str]] = [
     ("Gemini 2.5 Flash", "google/gemini-2.5-flash"),
-    ("Claude 4 Haiku", "anthropic/claude-haiku-4.5"),
-    ("Llama 3.3 70B Instruct", "meta-llama/llama-3.3-70b-instruct"),
-    ("Llama 4 Scout (Lightweight)", "meta-llama/llama-4-scout"),
-    ("Qwen2.5 Coder 32B Instruct", "qwen/qwen-2.5-coder-32b-instruct"),
+    ("Gemini 2.5 Flash Lite", "google/gemini-2.5-flash-lite"),
 ]
 
 DEFAULT_QUESTIONS = [
-    "这把玩什么?",
+    "这把怎么玩？",
     "装备怎么给？",
-    "站位如何调整",
+    "站位怎么调？",
 ]
 
 
@@ -95,8 +94,45 @@ def _build_rag_blocks(
     return lineup_block, core_block
 
 
-def _call_openrouter(model_id: str, user_text: str, *, temperature: float, timeout_s: float) -> str:
-    return gv._openrouter_chat_completion(
+def _estimate_network_jitter_s(base: str, key: str, tries: int = 3) -> float:
+    """粗略估计首包前网络抖动（RTT），用于拆分 TTFT。"""
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER", "https://github.com/").strip(),
+        "X-Title": os.getenv("OPENROUTER_APP_TITLE", "gemini_v1").strip(),
+    }
+    samples: List[float] = []
+    url = base.rstrip("/") + "/models"
+    for _ in range(max(1, tries)):
+        t0 = time.perf_counter()
+        try:
+            requests.get(url, headers=headers, timeout=8.0)
+            samples.append(time.perf_counter() - t0)
+        except Exception:
+            continue
+    if not samples:
+        return 0.0
+    samples.sort()
+    return samples[len(samples) // 2]
+
+
+def _call_openrouter_stream(
+    model_id: str,
+    user_text: str,
+    *,
+    temperature: float,
+    timeout_s: float,
+    max_tokens: int,
+) -> Dict[str, Any]:
+    first_chunk_ts: List[Optional[float]] = [None]
+
+    def _on_chunk(_: str) -> None:
+        if first_chunk_ts[0] is None:
+            first_chunk_ts[0] = time.perf_counter()
+
+    t0 = time.perf_counter()
+    answer = gv._openrouter_chat_completion(
         messages=[
             {"role": "system", "content": gv._coach_system_prompt()},
             {"role": "user", "content": user_text},
@@ -104,7 +140,19 @@ def _call_openrouter(model_id: str, user_text: str, *, temperature: float, timeo
         model=model_id,
         temperature=temperature,
         timeout_s=timeout_s,
+        max_tokens=max_tokens,
+        stream_output=True,
+        on_stream_chunk=_on_chunk,
     )
+    t1 = time.perf_counter()
+    ttft = (first_chunk_ts[0] - t0) if first_chunk_ts[0] is not None else (t1 - t0)
+    gen_sec = (t1 - first_chunk_ts[0]) if first_chunk_ts[0] is not None else 0.0
+    return {
+        "answer": answer,
+        "total_sec": (t1 - t0),
+        "ttft_sec": ttft,
+        "gen_sec": gen_sec,
+    }
 
 
 def main() -> None:
@@ -133,6 +181,7 @@ def main() -> None:
         help="逗号分隔的 OpenRouter model id，覆盖默认列表；无展示名时 id 即展示名",
     )
     ap.add_argument("--temperature", type=float, default=0.35)
+    ap.add_argument("--max-tokens", type=int, default=100, help="限制输出 token 上限（默认100）")
     ap.add_argument("--timeout", type=float, default=120.0)
     ap.add_argument("--json-out", type=Path, default=None, help="将原始结果写入 JSON（utf-8）")
     args = ap.parse_args()
@@ -174,6 +223,12 @@ def main() -> None:
     results: List[Dict[str, Any]] = []
     coach_temp = float(args.temperature)
     timeout_s = float(args.timeout)
+    max_tokens = max(1, int(args.max_tokens))
+    base, key, _ = gv._openrouter_env()
+    net_jitter_est = _estimate_network_jitter_s(base, key, tries=3)
+
+    print(f"流式: 开启 | max_tokens={max_tokens}")
+    print(f"网络抖动估计(中位RTT): {net_jitter_est:.3f}s")
 
     for label, model_id in model_rows:
         print(f"\n{'#' * 72}\n# 模型: {label}\n# id: {model_id}\n{'#' * 72}")
@@ -182,15 +237,28 @@ def main() -> None:
             user_text = _build_user_block(brief, lineup_rag, chess_rag, q)
             err: Optional[str] = None
             answer = ""
-            t0 = time.perf_counter()
+            total_sec = 0.0
+            ttft_sec = 0.0
+            gen_sec = 0.0
+            prefirst_wait_sec = 0.0
+            queue_prefill_est_sec = 0.0
             try:
-                answer = _call_openrouter(
-                    model_id, user_text, temperature=coach_temp, timeout_s=timeout_s
+                ret = _call_openrouter_stream(
+                    model_id,
+                    user_text,
+                    temperature=coach_temp,
+                    timeout_s=timeout_s,
+                    max_tokens=max_tokens,
                 )
+                answer = str(ret.get("answer") or "")
+                total_sec = float(ret.get("total_sec") or 0.0)
+                ttft_sec = float(ret.get("ttft_sec") or 0.0)
+                gen_sec = float(ret.get("gen_sec") or 0.0)
+                prefirst_wait_sec = ttft_sec
+                queue_prefill_est_sec = max(0.0, prefirst_wait_sec - net_jitter_est)
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
-            elapsed = time.perf_counter() - t0
-            model_total += elapsed
+            model_total += total_sec
 
             results.append(
                 {
@@ -198,14 +266,24 @@ def main() -> None:
                     "model_id": model_id,
                     "question_index": qi,
                     "question": q,
-                    "seconds": round(elapsed, 3),
+                    "seconds": round(total_sec, 3),
+                    "ttft_sec": round(ttft_sec, 3),
+                    "prefirst_wait_sec": round(prefirst_wait_sec, 3),
+                    "network_jitter_est_sec": round(net_jitter_est, 3),
+                    "queue_prefill_est_sec": round(queue_prefill_est_sec, 3),
+                    "generation_sec": round(gen_sec, 3),
                     "answer": answer if not err else "",
                     "error": err,
                 }
             )
 
             print(f"\n--- 问题 {qi}/{len(questions)}: {q} ---")
-            print(f"耗时: {elapsed:.2f}s")
+            print(
+                f"总耗时: {total_sec:.2f}s | TTFT: {ttft_sec:.2f}s | "
+                f"首包前等待: {prefirst_wait_sec:.2f}s | "
+                f"网关排队/预填充(估): {queue_prefill_est_sec:.2f}s | "
+                f"网络抖动(估): {net_jitter_est:.2f}s | 生成: {gen_sec:.2f}s"
+            )
             if err:
                 print(f"[错误] {err}")
             else:
