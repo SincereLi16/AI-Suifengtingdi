@@ -3,19 +3,25 @@
 从 lineup_detail_total.json（掌盟阵容 CDN 静态包）生成 RAG 用 jsonl，
 与 data/rag_legend_*.jsonl 风格一致，供 LLM 检索「阵容运营/装备/站位」等知识。
 
-依赖：仓库根目录 data/rag_legend_chess.jsonl、rag_legend_equip.jsonl、rag_legend_hex.jsonl（用于 ID→中文名）。
+依赖：data/rag_legend_chess.jsonl、rag_legend_equip.jsonl、rag_legend_hex.jsonl（ID→中文名）；
+另建议 data/chess_id_name_supplement.json（全量 hero_id→名，见 fetch_chess_id_name_map.py），用于补全 legend 按中文名去重导致的别名 ID。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from generate_rag.chess_id_utils import load_chess_id_supplement, merge_chess_id_maps
 DEFAULT_LINEUP_JSON = REPO_ROOT / "lineup_detail_total.json"
 DATA_DIR = REPO_ROOT / "data"
 DEFAULT_OUT = DATA_DIR / "rag_lineup_lineup.jsonl"
+DEFAULT_CHESS_ID_SUPPLEMENT = DATA_DIR / "chess_id_name_supplement.json"
 
 
 def _load_jsonl_id_name(path: Path, prefix: str, key: str = "name") -> Dict[str, str]:
@@ -235,6 +241,9 @@ def generate(
     chess_path: Path,
     equip_path: Path,
     hex_path: Path,
+    *,
+    chess_id_supplement_path: Optional[Path] = None,
+    no_chess_id_supplement: bool = False,
 ) -> int:
     raw = json.loads(lineup_path.read_text(encoding="utf-8"))
     items = raw.get("lineup_list")
@@ -242,6 +251,9 @@ def generate(
         raise SystemExit("lineup_detail_total.json 缺少 lineup_list 数组")
 
     chess = _load_jsonl_id_name(chess_path, "legend_chess")
+    if not no_chess_id_supplement:
+        sup_p = chess_id_supplement_path if chess_id_supplement_path is not None else DEFAULT_CHESS_ID_SUPPLEMENT
+        chess = merge_chess_id_maps(chess, load_chess_id_supplement(sup_p))
     equip = _load_jsonl_id_name(equip_path, "legend_equip")
     hexes = _load_jsonl_id_name(hex_path, "legend_hex")
 
@@ -285,9 +297,28 @@ def main() -> None:
     ap.add_argument("--chess", type=Path, default=DATA_DIR / "rag_legend_chess.jsonl")
     ap.add_argument("--equip", type=Path, default=DATA_DIR / "rag_legend_equip.jsonl")
     ap.add_argument("--hex", type=Path, default=DATA_DIR / "rag_legend_hex.jsonl")
+    ap.add_argument(
+        "--chess-id-supplement",
+        type=Path,
+        default=DEFAULT_CHESS_ID_SUPPLEMENT,
+        help="hero_id→中文名补全 JSON（默认 data/chess_id_name_supplement.json；由 fetch_chess_id_name_map.py 生成）",
+    )
+    ap.add_argument(
+        "--no-chess-id-supplement",
+        action="store_true",
+        help="不合并补全表（仅调试用）",
+    )
     args = ap.parse_args()
 
-    n = generate(args.input, args.output, args.chess, args.equip, args.hex)
+    n = generate(
+        args.input,
+        args.output,
+        args.chess,
+        args.equip,
+        args.hex,
+        chess_id_supplement_path=args.chess_id_supplement,
+        no_chess_id_supplement=args.no_chess_id_supplement,
+    )
     print(f"已写入 {args.output}，共 {n} 条。")
 
 

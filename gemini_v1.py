@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Pipeline 对局 JSON → 战术快报（含目标棋子详情）→ 阵容攻略附录 RAG → 随风听笛回答。
+Pipeline 对局 JSON → 战术快报（含检索命中的阵容要点与目标棋子详情）→ 随风听笛回答。
 
 用法示例：
   python gemini_v1.py
   # 默认：若 runs/battle_pipeline_v3_out 已有 *_summary.json 则读缓存；否则静默跑 pipeline。
   python gemini_v1.py --summary-json runs/.../01-a_summary.json  # 跳过 pipeline，仅调试
   python gemini_v1.py --img-dir "对局截图" -q "我这把该先合什么？"
-  python gemini_v1.py --no-rag   # 关闭本地 RAG（阵容+棋子），只喂战术快报 + 问题
+  python gemini_v1.py --no-rag   # 关闭本地 RAG（阵容检索+棋子智库），只喂战术快报 + 问题
 
-  交互终端下：随风听笛答完后可继续输入追问（首轮已含快报与双智库，追问不重跑 RAG）；空行或 q / quit / exit 结束。
+  交互终端下：随风听笛答完后可继续输入追问（首轮已含完整快报，追问不重跑检索）；空行或 q / quit / exit 结束。
   管道或非 TTY  stdin：只跑一轮（与原先一致）。
 
 说明：
@@ -36,9 +36,12 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from scripts.chess_recom import (
     board_line_hero_display_name,
+    chess_cost_from_core_or_legend,
+    hero_name_matches_board,
     load_core_chess_list,
     load_legend_chess_name_map,
     lookup_core_chess_row,
+    slot_role_and_cost_for_name,
     retrieve_core_chess_rag,
 )
 
@@ -107,7 +110,7 @@ from scripts.extra.equip_recom import pick_next_finished_recommendations  # noqa
 PIPELINE_CACHE_DIR = REPO_ROOT / "runs" / "battle_pipeline_v3_out"
 DEFAULT_PIPELINE_OUT = PIPELINE_CACHE_DIR
 DEFAULT_IMG_DIR = REPO_ROOT / "对局截图"
-DEFAULT_RAG_LINEUP = REPO_ROOT / "data" / "rag_lineup_lineup.jsonl"
+DEFAULT_RAG_LINEUP = REPO_ROOT / "data" / "rag_lineup_lineup_v1.jsonl"
 DEFAULT_RAG_CORE_CHESS = REPO_ROOT / "data" / "rag_core_chess.jsonl"
 DEFAULT_RAG_LEGEND_CHESS = REPO_ROOT / "data" / "rag_legend_chess.jsonl"
 
@@ -579,19 +582,6 @@ def _format_traits_block(tm: Optional[Dict[str, int]]) -> str:
     return _wrap_segments_line(parts)
 
 
-def _lineup_display_name_and_traits(full_name: str) -> Tuple[str, str]:
-    """从阵容名解析短名与「3xx|2yy」羁绊串。"""
-    name = (full_name or "").strip()
-    m = re.search(r"【([^】]+)】", name)
-    short = m.group(1).strip() if m else name
-    tail = name.split("】", 1)[-1].strip() if "】" in name else ""
-    if not tail:
-        return short, ""
-    pairs = re.findall(r"(\d+)([^\d]+)", tail)
-    traits = REPORT_PIPE_SEP.join(f"{a}{b.strip()}" for a, b in pairs)
-    return short, traits
-
-
 def _star_int_for_sort(r: Dict[str, Any], star_by_bar: Dict[int, Dict[str, Any]]) -> int:
     st: Any = r.get("star")
     if not isinstance(st, dict):
@@ -713,14 +703,19 @@ def _build_board_emoji_sections(
                     en = str(e.get("name") or "").strip()
                     if en:
                         eqs.append(en)
-        carry_label = "、".join(eqs) if eqs else "空"
+        disp_show = _hero_name_with_optional_short(
+            disp, row_doc if isinstance(row_doc, dict) else None
+        )
+        carry_label = (
+            "、".join(_equip_name_with_optional_short(e, equip_map) for e in eqs) if eqs else "空"
+        )
         n_eq = len(eqs)
         star_seg = _star_display_segment(r, star_by_bar)
         star_n = _star_int_for_sort(r, star_by_bar)
         role_line = _role_line_label(slot_tag)
 
         audit_lines = format_equipment_audit_terminal_lines(
-            hero_display_name=disp,
+            hero_display_name=disp_show,
             role_tags=role_tags_list,
             slot_role=slot_tag,
             eq_names=eqs,
@@ -742,10 +737,18 @@ def _build_board_emoji_sections(
                 meta_rec=rec_list,
                 equip_map=equip_map,
             )
-            rec_show = "无" if n_eq >= 3 else ("、".join(nxt) if nxt else "无")
+            rec_show = (
+                "无"
+                if n_eq >= 3
+                else (
+                    "、".join(_equip_name_with_optional_short(x, equip_map) for x in nxt)
+                    if nxt
+                    else "无"
+                )
+            )
 
         slot_ic = BOARD_SLOT_ICON_FULL if n_eq >= 3 else BOARD_SLOT_ICON_EMPTY
-        line1 = REPORT_PIPE_SEP.join([disp, star_seg, cost_s, role_line, loc])
+        line1 = REPORT_PIPE_SEP.join([disp_show, star_seg, cost_s, role_line, loc])
         line2 = (
             f"{slot_ic}{BOARD_EMOJI_TEXT_GAP}槽位状态：{n_eq}/3{REPORT_PIPE_SEP}"
             f"当前装备：{carry_label}{REPORT_PIPE_SEP}推荐装备：{rec_show}"
@@ -950,13 +953,21 @@ def _format_equip_column_emoji(summary: Dict[str, Any]) -> str:
 
     cnt = Counter(san)
     craft_lines = _craftable_from_component_counts(dict(cnt), recipes)
+    equip_map = load_legend_equip_full_map()
 
     def _join(xs: List[str]) -> str:
-        return "、".join(xs) if xs else "无"
+        return (
+            "、".join(_equip_name_with_optional_short(x, equip_map) for x in xs) if xs else "无"
+        )
+
+    def _join_craft(xs: List[str]) -> str:
+        if not xs:
+            return "无"
+        return "、".join(_craft_line_display_with_short(x, equip_map) for x in xs)
 
     cheng_s = _join(cheng)
     san_s = _join(san)
-    craft_s = _join(craft_lines)
+    craft_s = _join_craft(craft_lines)
     return (
         f"- 成装: {cheng_s}\n"
         f"- 散件状态: {san_s}{REPORT_PIPE_SEP}可合成: {craft_s}"
@@ -1000,21 +1011,292 @@ def _format_situation_line(
     )
 
 
-def _format_rag_top_section(rag_meta: List[Dict[str, Any]]) -> str:
+def _hero_name_with_optional_short(
+    disp: str,
+    row_doc: Optional[Dict[str, Any]],
+) -> str:
+    if not isinstance(row_doc, dict):
+        return disp
+    ns = str(row_doc.get("name_short") or "").strip()
+    if not ns:
+        return disp
+    return f"{disp}（{ns}）"
+
+
+def _equip_name_with_optional_short(
+    full_name: str,
+    equip_map: Dict[str, Dict[str, Any]],
+) -> str:
+    nm = (full_name or "").strip()
+    if not nm:
+        return full_name
+    row = equip_map.get(nm)
+    if not isinstance(row, dict):
+        return full_name
+    ns = str(row.get("name_short") or "").strip()
+    if not ns:
+        return full_name
+    return f"{full_name}（{ns}）"
+
+
+def _craft_line_display_with_short(
+    line: str,
+    equip_map: Dict[str, Dict[str, Any]],
+) -> str:
+    """「无尽之刃（暴风之剑+拳套）」类：仅给成装全名补简称。"""
+    s = (line or "").strip()
+    if not s:
+        return s
+    idx = s.find("（")
+    if idx <= 0:
+        return _equip_name_with_optional_short(s, equip_map)
+    head = s[:idx].strip()
+    tail = s[idx:]
+    return _equip_name_with_optional_short(head, equip_map) + tail
+
+
+def _lineup_v1_search_blob(d: Dict[str, Any]) -> str:
+    """用于关键词命中：结构化字段拼成可检索文本。"""
+    chunks: List[str] = [
+        str(d.get("name_short") or ""),
+        str(d.get("traits") or ""),
+        str(d.get("quality") or ""),
+        str(d.get("lineup_id") or ""),
+    ]
+    hp = d.get("hex_priority")
+    if isinstance(hp, list):
+        chunks.extend(str(x) for x in hp if str(x).strip())
+    ha = d.get("hex_alternative")
+    if isinstance(ha, list):
+        chunks.extend(str(x) for x in ha if str(x).strip())
+    for k in ("early_game", "tempo", "equip_strategy", "positioning"):
+        chunks.append(str(d.get(k) or ""))
+    bl = d.get("build_levels")
+    if isinstance(bl, list):
+        for row in bl:
+            if isinstance(row, dict):
+                chunks.append(str(row.get("pieces") or ""))
+    return "\n".join(chunks)
+
+
+def _format_lineup_v1_hex_body(hex_priority: Any, hex_alternative: Any) -> str:
+    hp = hex_priority if isinstance(hex_priority, list) else []
+    ha = hex_alternative if isinstance(hex_alternative, list) else []
+    hp = [str(x).strip() for x in hp if str(x).strip()]
+    ha = [str(x).strip() for x in ha if str(x).strip()]
     lines: List[str] = []
-    for i, m in enumerate(rag_meta):
-        if not isinstance(m, dict):
+    if hp:
+        lines.append(f"  ① 优先：{'、'.join(hp)}；")
+    if ha:
+        lines.append(f"  ② 备选：{'、'.join(ha)}；")
+    return "\n".join(lines) if lines else "  （无）"
+
+
+def _format_lineup_v1_build_body(build_levels: Any) -> str:
+    if not isinstance(build_levels, list) or not build_levels:
+        return "  （无按等级构筑参考）"
+    circled = "①②③④⑤⑥⑦⑧⑨⑩"
+    lines: List[str] = []
+    for i, row in enumerate(build_levels):
+        if not isinstance(row, dict):
             continue
-        rk = m.get("rank")
-        if rk is None:
-            rk = i + 1
-        full_name = str(m.get("name") or "")
-        short, traits = _lineup_display_name_and_traits(full_name)
-        if traits:
-            lines.append(f"- Top{rk}: {short} - {traits}")
-        else:
-            lines.append(f"- Top{rk}: {short}")
-    return "\n".join(lines) if lines else "- （无）"
+        mark = circled[i] if i < len(circled) else f"{i + 1}."
+        lv = row.get("level")
+        pcs = str(row.get("pieces") or "").strip()
+        try:
+            lv_s = f"{int(lv)}级" if lv is not None else "?级"
+        except (TypeError, ValueError):
+            lv_s = "?级"
+        lines.append(f"  {mark} {lv_s}：{pcs}")
+    return "\n".join(lines) if lines else "  （无按等级构筑参考）"
+
+
+def _parse_int_from_level(level_str: str) -> Optional[int]:
+    s = (level_str or "").strip()
+    if not s:
+        return None
+    ds = re.findall(r"\d+", s)
+    if not ds:
+        return None
+    try:
+        return int(ds[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_phase_tuple(phase_raw: str) -> Optional[Tuple[int, int]]:
+    """
+    解析阶段字符串（如 4-2 / 4–2 / 4－2 / 4 - 2 / 4-2总）为 (major, minor)。
+    失败返回 None。
+    """
+    s = (phase_raw or "").strip().replace("总", "")
+    m = re.search(r"(\d+)\s*[-–－—]\s*(\d+)", s)
+    if not m:
+        return None
+    try:
+        return (int(m.group(1)), int(m.group(2)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _phase_gt(phase_raw: str, major_minor: Tuple[int, int]) -> bool:
+    """phase_raw 是否严格大于给定 (major, minor)。无法解析时返回 False（保守不隐藏内容）。"""
+    cur = _parse_phase_tuple(phase_raw)
+    if cur is None:
+        return False
+    return cur > (int(major_minor[0]), int(major_minor[1]))
+
+
+def _infer_stage_kind_from_phase(phase_raw: str) -> Optional[str]:
+    """
+    映射对局阶段到 strategy 的 early/mid/late：
+      - 1-3 => early
+      - 4 => mid
+      - >=5 => late
+    """
+    if not phase_raw:
+        return None
+    m = re.search(r"(\d+)\s*[-–]\s*(\d+)", phase_raw)
+    major: Optional[int] = None
+    if m:
+        try:
+            major = int(m.group(1))
+        except (TypeError, ValueError):
+            major = None
+    else:
+        # 极少数 phase 可能只有数字
+        ds = re.findall(r"\d+", phase_raw)
+        if ds:
+            try:
+                major = int(ds[0])
+            except (TypeError, ValueError):
+                major = None
+    if major is None:
+        return None
+    if major <= 3:
+        return "early"
+    if major == 4:
+        return "mid"
+    return "late"
+
+
+def _filter_build_levels_by_target_level(
+    build_levels: Any, target_level_n: Optional[int]
+) -> List[Dict[str, Any]]:
+    if not isinstance(build_levels, list):
+        return []
+    if target_level_n is None:
+        # 不做裁剪
+        return [x for x in build_levels if isinstance(x, dict)]
+
+    rows: List[Dict[str, Any]] = [x for x in build_levels if isinstance(x, dict)]
+    exact: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            if int(row.get("level")) == int(target_level_n):
+                exact.append(row)
+        except (TypeError, ValueError):
+            continue
+    if exact:
+        return exact
+
+    # 兼容 7 级等：找不超过当前等级的最高构筑
+    lower: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            lv = int(row.get("level"))
+        except (TypeError, ValueError):
+            continue
+        if lv <= int(target_level_n):
+            lower.append(row)
+    if not lower:
+        return []
+    mx = max(int(x.get("level")) for x in lower if isinstance(x, dict) and x.get("level") is not None)
+    return [x for x in lower if str(x.get("level")) == str(mx)]
+
+
+def format_lineup_v1_report_block(
+    rec: Dict[str, Any],
+    *,
+    target_level_n: Optional[int] = None,
+    stage_kind: Optional[str] = None,
+    phase_raw: str = "",
+) -> str:
+    """单套阵容：写入战报用的 emoji 标题 + 结构化正文（可按等级/阶段裁剪）。"""
+    lid = str(rec.get("lineup_id") or "").strip()
+    quality = str(rec.get("quality") or "").strip()
+    name_short = str(rec.get("name_short") or "").strip()
+    traits = str(rec.get("traits") or "").strip()
+
+    suppress_hex_and_early = _phase_gt(phase_raw, (4, 2))
+    hex_body = _format_lineup_v1_hex_body(rec.get("hex_priority"), rec.get("hex_alternative"))
+
+    filtered_build_levels = _filter_build_levels_by_target_level(
+        rec.get("build_levels"), target_level_n=target_level_n
+    )
+    build_body = _format_lineup_v1_build_body(filtered_build_levels)
+
+    early = str(rec.get("early_game") or "").strip()
+    tempo = str(rec.get("tempo") or "").strip()
+    equip_strategy = str(rec.get("equip_strategy") or "").strip()
+    positioning = str(rec.get("positioning") or "").strip()
+
+    # strategy 若存在，按阶段挑选更贴近当前时间点的一段；但运营节奏/装备/站位始终保留输出位。
+    strategy_obj = rec.get("strategy") if isinstance(rec.get("strategy"), dict) else {}
+    if stage_kind == "early":
+        early = str(strategy_obj.get("early") or early).strip()
+    elif stage_kind == "mid":
+        tempo = str(strategy_obj.get("mid") or tempo).strip()
+    elif stage_kind == "late":
+        late_s = str(strategy_obj.get("late") or "").strip()
+        equip_strategy = late_s if late_s else equip_strategy
+
+    stage_lines: List[str] = []
+    if not suppress_hex_and_early:
+        stage_lines.append(f"🌱{REPORT_EMOJI_GAP}前期过渡：{early if early else '（无）'}")
+    stage_lines.extend(
+        [
+            f"⏱️{REPORT_EMOJI_GAP}运营节奏：{tempo if tempo else '（无）'}",
+            f"⚔️{REPORT_EMOJI_GAP}装备思路：{equip_strategy if equip_strategy else '（无）'}",
+            f"📍{REPORT_EMOJI_GAP}站位策略：{positioning if positioning else '（无）'}",
+        ]
+    )
+
+    header_line = REPORT_PIPE_SEP.join(
+        [
+            f"🆔{REPORT_EMOJI_GAP}阵容ID：{lid}",
+            f"⭐{REPORT_EMOJI_GAP}阵容质量：{quality}",
+            f"📛{REPORT_EMOJI_GAP}阵容名称：{name_short}",
+            f"🔗{REPORT_EMOJI_GAP}羁绊：{traits}",
+        ]
+    )
+    parts: List[str] = [REPORT_SEP, header_line]
+    if not suppress_hex_and_early:
+        parts.extend([f"⚡{REPORT_EMOJI_GAP}海克斯：", hex_body])
+    parts.extend([f"🏗️{REPORT_EMOJI_GAP}阵容构筑：", build_body, *stage_lines])
+    return "\n".join(parts)
+
+
+def join_lineup_v1_report_blocks(
+    picked_docs: List[Dict[str, Any]],
+    *,
+    target_level_n: Optional[int] = None,
+    stage_kind: Optional[str] = None,
+    phase_raw: str = "",
+) -> str:
+    """多套检索命中结果顺序拼接（每条已含 REPORT_SEP 开头）。"""
+    parts: List[str] = []
+    for d in picked_docs:
+        if isinstance(d, dict):
+            parts.append(
+                format_lineup_v1_report_block(
+                    d,
+                    target_level_n=target_level_n,
+                    stage_kind=stage_kind,
+                    phase_raw=phase_raw,
+                )
+            )
+    return "\n".join(parts).strip()
 
 
 def _target_equip_names_from_rag(
@@ -1068,7 +1350,9 @@ def _target_chess_detail_lines(
         meta = row["meta"]
 
     slot_role = str(meta.get("slot_role") or slot_role_fallback or "?")
-    line1 = f"- {chess_name} | {cs} | {slot_role}"
+    ns = str(row.get("name_short") or "").strip() if isinstance(row, dict) else ""
+    chess_head = f"{chess_name}（{ns}）" if ns else chess_name
+    line1 = f"- {chess_head} | {cs} | {slot_role}"
 
     traits: List[str] = []
     if isinstance(meta.get("traits"), list):
@@ -1088,7 +1372,7 @@ def _target_chess_detail_lines(
     rt_s = "、".join(role_tags) if role_tags else "—"
 
     eqs = _target_equip_names_from_rag(meta, equip_map, role_tags, slot_role)
-    rec_s = "、".join(eqs) if eqs else "无"
+    rec_s = "、".join(_equip_name_with_optional_short(x, equip_map) for x in eqs) if eqs else "无"
 
     parts: List[str] = []
     if t_s:
@@ -1099,9 +1383,46 @@ def _target_chess_detail_lines(
     return [line1, line2]
 
 
+def _parse_piece_names_from_build_pieces(pieces: str) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for chunk in re.split(r"[；;]", str(pieces or "")):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        head = chunk.split("(", 1)[0].strip()
+        head = re.sub(r"（[^）]*）\s*$", "", head).strip()
+        if not head or head.startswith("英雄"):
+            continue
+        if head not in seen:
+            seen.add(head)
+            out.append(head)
+    return out
+
+
+def _current_build_target_names(lineup_top_doc: Optional[Dict[str, Any]], target_level_n: Optional[int]) -> List[str]:
+    if not isinstance(lineup_top_doc, dict) or not lineup_top_doc:
+        return []
+    rows = _filter_build_levels_by_target_level(lineup_top_doc.get("build_levels"), target_level_n)
+    out: List[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for name in _parse_piece_names_from_build_pieces(str(row.get("pieces") or "")):
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
+    return out
+
+
 def _format_chess_target_and_discard(
+    summary: Dict[str, Any],
     chess_meta: List[Dict[str, Any]],
     core_list: List[Dict[str, Any]],
+    *,
+    lineup_top_doc: Optional[Dict[str, Any]] = None,
+    target_level_n: Optional[int] = None,
 ) -> Tuple[str, str, str]:
     """返回 (目标棋子块, 弃子块, 装备继承块)。目标棋子含羁绊、职业粗分、推荐装（core+RAG 补全）。"""
     if not chess_meta or not isinstance(chess_meta[0], dict):
@@ -1110,53 +1431,34 @@ def _format_chess_target_and_discard(
     legend_map = load_legend_chess_name_map(DEFAULT_RAG_LEGEND_CHESS)
     m0 = chess_meta[0]
     target_lines: List[str] = []
-    for e in m0.get("missing_ge4") or []:
-        if not isinstance(e, dict):
-            continue
-        h = str(e.get("chess_name") or "").strip()
-        if not h:
-            continue
-        c = e.get("cost")
-        rl = str(e.get("slot_role") or "?")
-        try:
-            c_int = int(c) if c is not None else None
-        except (TypeError, ValueError):
-            c_int = None
+    board_names: List[str] = []
+    rows = summary.get("confirmed_fightboard_results")
+    if isinstance(rows, list):
+        for r in rows:
+            if isinstance(r, dict):
+                nm = str(r.get("best") or "").strip().rstrip("?").rstrip("？").strip()
+                if nm:
+                    board_names.append(nm)
+    current_build_names = _current_build_target_names(lineup_top_doc, target_level_n)
+    missing_current_build = [h for h in current_build_names if not hero_name_matches_board(h, board_names)]
+    for h in missing_current_build:
+        cost = chess_cost_from_core_or_legend(h, core_list, legend_map)
+        slot_role, _ = slot_role_and_cost_for_name(h, core_list, legend_map)
         target_lines.extend(
             _target_chess_detail_lines(
                 h,
-                cost=c_int,
-                slot_role_fallback=rl,
+                cost=cost,
+                slot_role_fallback=slot_role or "?",
                 core_list=core_list,
                 equip_map=equip_map,
                 legend_map=legend_map,
-                cost_unknown=False,
+                cost_unknown=cost is None,
             )
         )
-    unk = m0.get("missing_unknown_cost") or []
-    if isinstance(unk, list):
-        for e in unk:
-            if not isinstance(e, dict):
-                continue
-            h = str(e.get("chess_name") or "").strip()
-            if not h:
-                continue
-            rl = str(e.get("slot_role") or "?")
-            target_lines.extend(
-                _target_chess_detail_lines(
-                    h,
-                    cost=None,
-                    slot_role_fallback=rl,
-                    core_list=core_list,
-                    equip_map=equip_map,
-                    legend_map=legend_map,
-                    cost_unknown=True,
-                )
-            )
     target_block = "\n".join(target_lines) if target_lines else "- （无）"
 
     discard_lines: List[str] = []
-    gu_rows = [g for g in (m0.get("board_guajia") or []) if isinstance(g, dict)]
+    dc_rows = [g for g in (m0.get("board_discard") or []) if isinstance(g, dict)]
 
     def _cost_key(g: Dict[str, Any]) -> Tuple[int, int, str]:
         cs = str(g.get("cost_str") or "")
@@ -1167,12 +1469,12 @@ def _format_chess_target_and_discard(
         sn = -int(sm.group(1)) if sm else 0
         return (cn, sn, str(g.get("display") or ""))
 
-    gu_rows.sort(key=_cost_key)
-    for g in gu_rows:
+    dc_rows.sort(key=_cost_key)
+    for g in dc_rows:
         disp = str(g.get("display") or "")
         star_seg = str(g.get("star_seg") or "?星")
         cost_str = str(g.get("cost_str") or "?费")
-        role = str(g.get("slot_role") or "挂件")
+        role = str(g.get("slot_role") or "打工仔")
         discard_lines.append(f"- {disp} | {star_seg} | {cost_str} | {role}")
     discard_block = "\n".join(discard_lines) if discard_lines else "- （无）"
 
@@ -1204,7 +1506,9 @@ def build_matchbook_report(
     *,
     core_chess_path: Optional[Path] = None,
     summary_json_path: Optional[Path] = None,
-    rag_meta: Optional[List[Dict[str, Any]]] = None,
+    lineup_v1_report: Optional[str] = None,
+    lineup_top_doc: Optional[Dict[str, Any]] = None,
+    target_level_n: Optional[int] = None,
     chess_meta: Optional[List[Dict[str, Any]]] = None,
     no_rag: bool = False,
 ) -> str:
@@ -1261,17 +1565,24 @@ def build_matchbook_report(
         _format_equip_column_emoji(summary),
     ]
 
-    if not no_rag and rag_meta:
+    if not no_rag:
+        lv = (lineup_v1_report or "").strip()
         parts.extend(
             [
                 REPORT_SEP,
                 f"🏆{REPORT_EMOJI_GAP}推荐阵容",
-                _format_rag_top_section(rag_meta),
+                lv if lv else "- （无）",
             ]
         )
 
     if not no_rag and chess_meta:
-        tb, db, eqh = _format_chess_target_and_discard(chess_meta, core_list)
+        tb, db, eqh = _format_chess_target_and_discard(
+            summary,
+            chess_meta,
+            core_list,
+            lineup_top_doc=lineup_top_doc,
+            target_level_n=target_level_n,
+        )
         parts.extend(
             [
                 REPORT_SEP,
@@ -1300,7 +1611,9 @@ def build_tactical_brief(
         summary,
         core_chess_path=core_chess_path,
         summary_json_path=summary_json_path,
-        rag_meta=None,
+        lineup_v1_report=None,
+        lineup_top_doc=None,
+        target_level_n=None,
         chess_meta=None,
         no_rag=True,
     )
@@ -1363,24 +1676,34 @@ def _extract_keywords_for_rag(
     return out
 
 
-# generate_rag_lineup 里与「实时战术快报」棋盘重复度最高的两段（坐标流水账），运行时删掉以省 token
-_RAG_COACH_DROP_LINE_PREFIXES: Tuple[str, ...] = (
-    "【按等级构筑参考】",
-    "【成型站位与出装】",
-)
-
-
-def _trim_lineup_rag_text_for_coach(raw: str) -> str:
-    """方案 A：不动 jsonl，仅去掉攻略里超长坐标段再喂模型。"""
-    if not (raw or "").strip():
-        return raw
-    kept: List[str] = []
-    for line in raw.splitlines():
-        s = line.strip()
-        if any(s.startswith(p) for p in _RAG_COACH_DROP_LINE_PREFIXES):
+def _board_hero_names_with_star_and_role(
+    summary: Dict[str, Any],
+    *,
+    core_list: List[Dict[str, Any]],
+    summary_json_path: Optional[Path] = None,
+) -> List[Tuple[str, int, str]]:
+    """
+    棋盘棋子画像：[(英雄名, 星级(未知=-1), 槽位角色)]。
+    槽位角色来自 core_chess.meta.slot_role（主C/主坦/打工仔/混合/挂件）。
+    """
+    rows = summary.get("confirmed_fightboard_results")
+    if not isinstance(rows, list):
+        return []
+    star_by_bar = _fightboard_star_by_bar(summary, summary_json_path=summary_json_path)
+    out: List[Tuple[str, int, str]] = []
+    for r in rows:
+        if not isinstance(r, dict):
             continue
-        kept.append(line)
-    return "\n".join(kept).strip()
+        disp = board_line_hero_display_name(r)
+        name = disp.rstrip("?").rstrip("？").strip()
+        if not name:
+            continue
+        row_doc = lookup_core_chess_row(name, core_list)
+        meta = row_doc.get("meta") if isinstance(row_doc, dict) and isinstance(row_doc.get("meta"), dict) else {}
+        slot_role = str(meta.get("slot_role") or "").strip()
+        star_n = _star_int_for_sort(r, star_by_bar)
+        out.append((name, star_n, slot_role))
+    return out
 
 
 def retrieve_lineup_rag(
@@ -1389,33 +1712,71 @@ def retrieve_lineup_rag(
     top_k: int = 3,
     *,
     min_quality: Optional[str] = None,
+    core_chess_path: Optional[Path] = None,
+    summary_json_path: Optional[Path] = None,
 ) -> Tuple[str, List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    简易检索：关键词在阵容 doc['text'] 中的命中数（无需向量库）。
+    简易检索：关键词在阵容结构化字段拼成的文本中的命中数（无需向量库）。
+    数据源：rag_lineup_lineup_v1.jsonl（type=lineup_v1）。
     min_quality：如 A 表示仅保留评级不劣于 A 的攻略（S 优于 A）。
-    返回 (拼好的 RAG 文本块, lineup_id 列表, 终端展示用元数据列表, 命中的完整 doc 列表（与 meta 同序）)。
+    返回 (附录文本块，阵容侧已改为空串；lineup_id 列表；meta；命中的完整 doc 列表)。
     """
     docs = _load_lineup_docs(rag_path)
+    docs = [
+        d
+        for d in docs
+        if str(d.get("type") or "") == "lineup_v1"
+        or str(d.get("id") or "").startswith("lineup_lineup_v1:")
+    ]
     mq = (min_quality or "").strip().upper()[:1]
     if mq and mq in _LINEUP_QUALITY_ORDER:
         max_rank = _lineup_quality_rank(mq)
         docs = [d for d in docs if _lineup_quality_rank(str(d.get("quality") or "")) <= max_rank]
     if not docs:
-        return ("（阵容智库 RAG 在给定评级过滤下无可用条目或文件为空。）", [], [], [])
+        return ("", [], [], [])
 
     kws = _extract_keywords_for_rag(summary)
     if not kws:
         kws = ["阵容"]
 
+    # 新检索机制：
+    # 1) 优先用当前场上「2星主C/主坦」检索；
+    # 2) 若无，再用「1星主C/主坦」；
+    # 3) 若场上无主C/主坦，则按当前棋子与阵容重合度最高排序。
+    ccp = core_chess_path or DEFAULT_RAG_CORE_CHESS
+    core_list = load_core_chess_list(ccp)
+    board_profile = _board_hero_names_with_star_and_role(
+        summary,
+        core_list=core_list,
+        summary_json_path=summary_json_path,
+    )
+    core_rows = [x for x in board_profile if x[2] in ("主C", "主坦")]
+    core_2s = [n for n, s, _ in core_rows if s >= 2]
+    core_1s = [n for n, s, _ in core_rows if s == 1]
+    preferred_names: List[str] = core_2s if core_2s else core_1s
+    board_names = list({n for n, _, _ in board_profile if n})
+
     scored: List[Tuple[int, Dict[str, Any]]] = []
     for d in docs:
-        text = str(d.get("text") or "")
-        score = sum(1 for kw in kws if kw and kw in text)
-        # 名称子串也计分
-        name = str(d.get("name") or "")
+        text = _lineup_v1_search_blob(d)
+        base_score = sum(1 for kw in kws if kw and kw in text)
+        name_s = str(d.get("name_short") or "")
         for kw in kws:
-            if len(kw) >= 2 and kw in name:
-                score += 2
+            if len(kw) >= 2 and kw in name_s:
+                base_score += 2
+
+        score = base_score
+        if preferred_names:
+            # 有主C/主坦时，优先由其召回；命中一个核心名给高权重，保证排序前置。
+            pref_hit = 0
+            for n in preferred_names:
+                if n and (n in text or (len(n) >= 2 and n in name_s)):
+                    pref_hit += 1
+            score = pref_hit * 100 + base_score
+        elif not core_rows and board_names:
+            # 场上无主C/主坦：退化为“当前棋子重合度”主导排序。
+            overlap = sum(1 for n in board_names if n and n in text)
+            score = overlap * 100 + base_score
         scored.append((score, d))
 
     scored.sort(key=lambda x: (-x[0], x[1].get("lineup_id", "")))
@@ -1423,19 +1784,13 @@ def retrieve_lineup_rag(
     if not picked:
         picked = scored[: min(2, len(scored))]
 
-    blocks: List[str] = []
     ids: List[str] = []
     meta: List[Dict[str, Any]] = []
     picked_docs: List[Dict[str, Any]] = []
     for rank, (sc, d) in enumerate(picked, start=1):
         lid = str(d.get("lineup_id") or "")
         ids.append(lid)
-        title = str(d.get("name") or lid)
-        body = _trim_lineup_rag_text_for_coach(str(d.get("text") or ""))
-        # 控制长度，避免单次请求过大
-        if len(body) > 3500:
-            body = body[:3500] + "\n…(截断)"
-        blocks.append(f"--- Top{rank} | {title} ---\n{body}")
+        title = str(d.get("name_short") or lid)
         meta.append(
             {
                 "lineup_id": lid,
@@ -1447,7 +1802,7 @@ def retrieve_lineup_rag(
         )
         picked_docs.append(d)
 
-    return ("\n\n".join(blocks), ids, meta, picked_docs)
+    return ("", ids, meta, picked_docs)
 
 
 def _coach_system_prompt() -> str:
@@ -1459,7 +1814,6 @@ def _coach_system_prompt() -> str:
 你会收到包含以下信息的结构化文本，这是你成为你分析的基础：
 1. 哈基星提问：他的弱智原话（多轮时首轮为完整块，后续轮次可能只有一句追问，仍视为同一局、同一套快报与 RAG，勿让哈基星复述战报）。
 2. 战术快报：他当前的对局信息。包含 [阶段/等级/经验/金币/胜负/血量/羁绊/棋子/装备]等；场上各子「主C/主坦/打工/挂件」以本块为准。其中「目标棋子」已含缺口棋子的羁绊、职业定位、推荐装备；
-
 一、分析逻辑
 1. 资产状态实例化
 你需遍历{战术快报}与{{阵容智库RAG}}（附录），并按下述逻辑进行内部 [标签] 标记：
@@ -1469,9 +1823,8 @@ Step1：棋子状态标记（场上定位以战术快报棋盘行为准）
   [T2]：满足 (棋子∈{{主力核心}} OR (棋子∈{{打工}} AND {{星级}} < 2)。
   [Slot_Full]=True：满足 ({{槽位状态}} == 3，严禁将携带 1 件或 2 件装备的棋子标记为 Slot_Full。内部审计时必须显式数出 1, 2, 3。
 Step2：阵容质量标记
-[高费置换态] = True：满足 (阶段 >= 4-3) AND (场上存在 [T2])
-[阵容残缺态] = True：满足 ({{目标棋子}} != {{场上棋子}}
-
+[高费置换态] = True：满足 (阶段 >= 4-3) AND ({{弃子清单}!=0)
+[阵容残缺态] = True：满足 ({{目标棋子}} != 0
 2. 装备分配协议
 你在处理装备时，必须严格执行以下内部线性逻辑：
 Step1：战力缺口预检
@@ -1481,21 +1834,18 @@ Step1：战力缺口预检
 [缺口优先级]：[防御缺口] > [输出缺口]。
 Step2：合成与分配决策
   [装备分发优先级]：成装装配顺序严禁违背：
-  Top 1: [T0] (且 {{槽位状态}}!=3
-  Top 2: [T1] (且 {{槽位状态}}!=3
-  Top 3: [T2] (且 {{槽位状态}}!=3
+  Top 1: [T0] 且 [Slot_Full]=False 
+  Top 2: [T1] 且 [Slot_Full]=False
+  Top 3: [T2] 且 [Slot_Full]=False
 * [纹章/特殊装处理]：对于纹章（转职），除非 {{装备继承}} 明确要求，否则禁止调动，保持原状。
-
 3. 空间坐标判定 
 [判定对象白名单]：
 你在进行站位分析时，仅允许对标记为 [T0] 或 [T1]的棋子进行坐标审计。
 [执行逻辑]：
-核对身份：拿到 (Row, Col) 后，先匹配 {{棋子分析}}中的[定位]。
+核对身份：拿到 (Row, Col) 后，先匹配 {{棋子分析}}中的 {{定位}}。
 逻辑匹配：
-IF (定位 == "主C") AND (Row <= 2)：触发 [送命站位]。
-IF (定位 == "主坦") AND (Row >= 3)：触发 [假赛站位]。
-静默协议：若场上所有 主C 均在 Row >= 3 且所有 主坦 均在 Row <= 2，则判定 [Trigger D] 未命中，不发表任何指令 。
-
+IF ({{定位}} == "主C" AND {{职业}}!=战士 ) AND (Row <= 2)：触发 [送命站位]。
+IF ({{定位}} == "主坦") AND (Row >= 3)：触发 [假赛站位]。
 4. 未来行动指令
 模型将根据以下条件进行指令判定：
 [梭哈]：一次性花光所有{{金币}}，寻找 [目标棋子]，或将场上 [T0/T1] 追至 2/3 星。
@@ -1503,27 +1853,42 @@ IF (定位 == "主坦") AND (Row >= 3)：触发 [假赛站位]。
 [拉人口]：用({{金币}}购买({{经验}}以提升至下一({{等级}}
 [存钱]：将({{金币}}积累至>= 50
 
-二、分析顺序
+三、分析顺序
 Step1：将所有{{棋子分析}}中的棋子实例化为 [T0/T1/T2];
 Step2：检查{{目标棋子}}与{{弃子清单}}，分析棋子替换策略；
 Step3：检查{{棋子分析}}中的{{槽位状态}}、{{推荐装备}}与{{装备审计}}，运行 [装备分配协议]，判断当前阵容是否存在[防御缺口]/[输出缺口]，并通过[装备分发优先级]确定流向；
 Step4：基于{{棋子分析}}中的(Row, Col) 坐标，判定是否存在 [送命站位] 或 [假赛站位]。
 Step5：基于({{战术快报}}中的{{局势分析}}，确定未来行动指令[梭哈]/[慢D]/[拉人口]/[存钱]
 
-三、 输出逻辑
-1. 优先级纠偏：
-完成所有逻辑分析后，必须按照 [优先级 A > B > C > D] 进行扫描。一旦命中高优先级条件，立即截断后续思考，锁定该意图为唯一输出。
-Trigger A：节奏生死
-判定条件：满足 (血量 < 25) OR (血量 < 40 AND 阶段 >= 5-1) 
-执行指令：下令 [梭哈]，并强制要求卖掉场上 [T2]。
-Trigger B：资产优化
-判定条件：[高费置换态] == True OR [阵容残缺态] == True
-执行指令：下令 [慢D]，并强制要求卖出 [T2]。
-* [严格准入]：严禁推荐任何未出现在 {{目标棋子}}、{{阵容智库RAG}} 中的棋子。
-Trigger C：装备变现
-判定条件：满足 [闲置装备]中的[成装] > 0 AND [T0/T1]的[Slot_Full]=False OR [闲置装备]中的[可合成] > 0 AND  [T0/T1]的[Slot_Full]=False
+*** [调试模式：内部思维链路]*** 
+在生成最终输出前，你必须先在 [THINKING] 标签内完成以下逻辑闭环扫描（此部分不计入 60 字限制）：
+资产定性：列出当前识别到的 [T0/T1] 棋子及其定位。
+缺口审计：明确当前是 [防御缺口] 还是 [输出缺口]。
+坐标校对：提取目标主C/主坦的原始 Row 数值，判定是否真的命中 [送命/假赛]。
+Trigger 锁定：明确最终锁定的唯一 Trigger 编号（A/B/C/D
+“[THINKING] 过程必须基于原始数据事实，严禁为了匹配输出结论而篡改逻辑审计结果。”
 
-四、输出规范
+四、 输出逻辑
+1. 优先级纠偏：
+完成所有逻辑分析后，必须按照 [优先级 A > B > C > D] 进行扫描。一旦锁定高优先级 Trigger，严禁在正文中提及其他 Trigger 的指令。
+Trigger A：生死判定
+判定条件：满足 (血量 < 25)
+执行指令：下令 [梭哈]，强制要求卖出 [弃子清单]中的棋子。
+Trigger B：节奏诊断
+判定条件：定位当前{{阶段}}，比对{{运营思路}}，查询下回合是否存在运营指令。
+执行指令：若存在指令，则生成相关运营建议。
+Trigger C：资产优化
+判定条件：[高费置换态] == True OR [阵容残缺态] == True
+执行指令：下令 [慢D]，并强制要求卖出 [弃子清单]中的棋子。
+Trigger D：装备变现
+判定条件：满足 [闲置装备]中的[成装] > 0 AND [成装]∈在场[T0/T1]的[推荐装备] OR [闲置装备]中的[可合成] > 0 AND [可合成]∈在场[T0/T1]的[推荐装备]
+执行指令：结合[装备继承]与[装备思路]，运行[装备分配协议]，生成装备分配指令。
+Trigger E：站位纠偏
+判定条件：场上存在 [假赛站位]OR [送命站位]
+执行指令：基于({{定位}} 与({{阵容构筑}}，生成站位调整指令。 
+
+五、输出规范
+*** 在生成最终输出前，请先输出 [THINKING]以便调优 *** 
 1、极简一句话：字数 60 以内，严禁列 123，严禁复读[战术快报]数据。
 2、去技术化：严禁对外提及 Trigger、T0、Slot_Full、快报等词汇。
 3、黑话导向：严禁称呼棋子或装备全称，以简称替代：大嘴、挖掘机、奥巴马等；
@@ -1539,15 +1904,13 @@ def _coach_first_user_message(
     rag_chess_block: str,
     user_question: str,
 ) -> str:
-    """tactical_brief 已含战报及「目标棋子」羁绊/推荐装等；仅附录阵容攻略长文，不再重复喂棋子智库全文。"""
+    """tactical_brief 已含推荐阵容要点、目标棋子与弃子等；不再单独附录阵容长文或棋子智库全文。"""
+    _ = rag_lineup_block
     _ = rag_chess_block
     parts = [
         "【哈基星问题】\n" + user_question.strip(),
         "【对局情报】\n" + tactical_brief.strip(),
     ]
-    rl = (rag_lineup_block or "").strip()
-    if rl and not rl.startswith("（本回合未注入"):
-        parts.append("【阵容攻略原文（附录）】\n" + rl)
     return "\n\n".join(parts)
 
 
@@ -1755,10 +2118,10 @@ def _pipeline_quiet_progress_until(
 
 def build_coach_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        description="Pipeline JSON → 战术快报 + 双智库 RAG → 随风听笛",
+        description="Pipeline JSON → 战术快报（含阵容 v1 检索）+ 棋子智库 → 随风听笛",
         epilog="默认优先使用 runs/battle_pipeline_v3_out 下已有 *_summary.json（跳过 pipeline）；\n"
         "无缓存时再跑 pipeline（stderr 转圈；输入问题时暂停刷新）。\n"
-        "快报预览后直接请求模型。--force-pipeline 可强制重新识别。--no-rag 可关闭阵容+棋子 RAG。--summary-json 指定单文件调试。",
+        "快报预览后直接请求模型。--force-pipeline 可强制重新识别。--no-rag 可关闭阵容检索与棋子智库。--summary-json 指定单文件调试。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument(
@@ -1793,9 +2156,9 @@ def build_coach_argparser() -> argparse.ArgumentParser:
         "--rag-lineup",
         type=Path,
         default=DEFAULT_RAG_LINEUP,
-        help="rag_lineup_lineup.jsonl 路径",
+        help="rag_lineup_lineup_v1.jsonl 路径",
     )
-    ap.add_argument("--rag-top-k", type=int, default=3, help="阵容智库检索条数")
+    ap.add_argument("--rag-top-k", type=int, default=3, help="阵容 v1 检索条数")
     ap.add_argument(
         "--rag-core-chess",
         type=Path,
@@ -1807,12 +2170,12 @@ def build_coach_argparser() -> argparse.ArgumentParser:
         "--rag-min-quality",
         type=str,
         default="A",
-        help="阵容智库：仅保留该评级及以上（S 最优；默认 A 即只检索 S 与 A）。传 - 或 all 表示不按评级过滤",
+        help="阵容 v1：仅保留该评级及以上（S 最优；默认 A 即只检索 S 与 A）。传 - 或 all 表示不按评级过滤",
     )
     ap.add_argument(
         "--no-rag",
         action="store_true",
-        help="不检索阵容/棋子 jsonl，仅用战术快报 + 问题",
+        help="不检索阵容 v1 / 棋子 jsonl，仅用战术快报 + 问题",
     )
     ap.add_argument(
         "--pipeline-verbose",
@@ -1826,7 +2189,7 @@ def build_coach_bundle(
     args: argparse.Namespace,
     summary_path: Path,
 ) -> Dict[str, Any]:
-    """读 summary、构建战术快报与双智库 RAG；供 gemini_v2 与录音并行。"""
+    """读 summary、构建战术快报与棋子智库 RAG；供 gemini_v2 与录音并行。"""
     t_prep0 = time.perf_counter()
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     _rq = (args.rag_min_quality or "A").strip()
@@ -1838,14 +2201,28 @@ def build_coach_bundle(
     if args.no_rag:
         rag_block = "（本回合未注入阵容智库。）"
         rag_meta: List[Dict[str, Any]] = []
+        lineup_v1_report_str = ""
         chess_block = "（本回合未注入棋子智库。）"
         chess_meta: List[Dict[str, Any]] = []
     else:
-        rag_block, _rag_ids, rag_meta, lineup_docs = retrieve_lineup_rag(
+        rag_block = ""
+        player_on = (summary.get("modules") or {}).get("player") or {}
+        phase_raw = _field_parsed(player_on, "phase").replace("总", "")
+        stage_kind = _infer_stage_kind_from_phase(phase_raw)
+        target_level_n = _parse_int_from_level(_field_parsed(player_on, "level"))
+        _, _rag_ids, rag_meta, lineup_docs = retrieve_lineup_rag(
             summary,
             args.rag_lineup,
-            top_k=max(1, int(args.rag_top_k)),
+            top_k=1,
             min_quality=min_q,
+            core_chess_path=args.rag_core_chess.resolve(),
+            summary_json_path=summary_path,
+        )
+        lineup_v1_report_str = join_lineup_v1_report_blocks(
+            lineup_docs,
+            target_level_n=target_level_n,
+            stage_kind=stage_kind,
+            phase_raw=phase_raw,
         )
         lineup_top1 = lineup_docs[0] if lineup_docs else None
         chess_block, _chess_ids, chess_meta = retrieve_core_chess_rag(
@@ -1860,7 +2237,9 @@ def build_coach_bundle(
         summary,
         core_chess_path=args.rag_core_chess.resolve(),
         summary_json_path=summary_path,
-        rag_meta=rag_meta if not args.no_rag else None,
+        lineup_v1_report=lineup_v1_report_str if not args.no_rag else None,
+        lineup_top_doc=lineup_top1 if not args.no_rag else None,
+        target_level_n=target_level_n if not args.no_rag else None,
         chess_meta=chess_meta if not args.no_rag else None,
         no_rag=args.no_rag,
     )
@@ -1989,7 +2368,7 @@ def run_coach_after_summary(
         if not sys.stdin.isatty():
             break
         print(
-            "—— 首轮已含战术快报与双智库 RAG，追问不必重跑检索；"
+            "—— 首轮已含完整战术快报，追问不必重跑检索；"
             "模型依赖对话历史继续推理（上下文过长被截断时需新开一局或重喂快报）。"
         )
         print("—— 继续提问直接输入；空行或 q / quit / exit 结束。\n")
@@ -2008,7 +2387,7 @@ def run_coach_after_summary(
     if args.no_rag:
         print(f"  读 JSON + 构建快报（无 RAG）: {t_prep1 - t_prep0:.2f}s")
     else:
-        print(f"  读 JSON + 构建快报 + 双智库 RAG: {t_prep1 - t_prep0:.2f}s")
+        print(f"  读 JSON + 构建快报 + 阵容检索与棋子智库: {t_prep1 - t_prep0:.2f}s")
     print(f"  LLM 合计（{turn} 轮）: {ll_total:.2f}s")
     print()
 

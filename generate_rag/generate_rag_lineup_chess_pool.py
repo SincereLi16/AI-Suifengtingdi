@@ -18,12 +18,18 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, DefaultDict, Dict, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from generate_rag.chess_id_utils import load_chess_id_supplement, merge_chess_id_maps
+
 DATA_DIR = REPO_ROOT / "data"
+DEFAULT_CHESS_ID_SUPPLEMENT = DATA_DIR / "chess_id_name_supplement.json"
 DEFAULT_RAG_LINEUP = DATA_DIR / "rag_lineup_lineup.jsonl"
 DEFAULT_LINEUP_TOTAL = REPO_ROOT / "lineup_detail_total.json"
 DEFAULT_OUT = DATA_DIR / "rag_core_chess.jsonl"
@@ -595,6 +601,8 @@ def generate(
     out_path: Path,
     prefer_lineup_json: bool,
     equip_supplement_path: Optional[Path] = None,
+    chess_id_supplement_path: Optional[Path] = None,
+    no_chess_id_supplement: bool = False,
 ) -> int:
     valid_names, cost_by_name = _load_chess_names(chess_path)
     if not valid_names:
@@ -602,6 +610,9 @@ def generate(
 
     chess_by_name = _load_chess_by_name(chess_path)
     chess_id_map = _load_jsonl_id_map(chess_path, "legend_chess")
+    if not no_chess_id_supplement:
+        sup_p = chess_id_supplement_path if chess_id_supplement_path is not None else DEFAULT_CHESS_ID_SUPPLEMENT
+        chess_id_map = merge_chess_id_maps(chess_id_map, load_chess_id_supplement(sup_p))
     equip_id_map = _load_jsonl_id_map(equip_path, "legend_equip")
 
     # 若存在 lineup_detail_total.json，优先用结构化字段（主C/装备/6 级更准），否则仅解析 jsonl 文本
@@ -668,6 +679,17 @@ def main() -> None:
         action="store_true",
         help="强制只用 rag_lineup_lineup.jsonl 文本解析（忽略 lineup_detail_total.json）",
     )
+    ap.add_argument(
+        "--chess-id-supplement",
+        type=Path,
+        default=DEFAULT_CHESS_ID_SUPPLEMENT,
+        help="hero_id→中文名补全 JSON（默认 data/chess_id_name_supplement.json）",
+    )
+    ap.add_argument(
+        "--no-chess-id-supplement",
+        action="store_true",
+        help="不合并补全表（仅调试用）",
+    )
     args = ap.parse_args()
 
     lj = args.lineup_json
@@ -685,6 +707,8 @@ def main() -> None:
         out_path=args.output.resolve(),
         prefer_lineup_json=use_struct,
         equip_supplement_path=esp,
+        chess_id_supplement_path=args.chess_id_supplement,
+        no_chess_id_supplement=args.no_chess_id_supplement,
     )
     print(f"已写入 {args.output}，共 {n} 条棋子池 RAG。")
     print("可将该文件用于关键词检索或并入 gemini_v1 的 RAG 流程。")

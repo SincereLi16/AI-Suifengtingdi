@@ -204,6 +204,50 @@ def parse_lineup_final_hero_names(text: str) -> List[str]:
     return out
 
 
+def _parse_piece_names_from_v1_pieces_string(pcs: str) -> List[str]:
+    """v1 构筑串：「厄运小姐（主C）(R4,C1)；…」→ 棋子名列表。"""
+    out: List[str] = []
+    seen: set[str] = set()
+    for chunk in re.split(r"[；;]", pcs):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        ap = chunk.find("(")
+        if ap < 0:
+            continue
+        head = chunk[:ap].strip()
+        head = re.sub(r"（[^）]*）\s*$", "", head).strip()
+        if not head or head.startswith("英雄"):
+            continue
+        if head not in seen:
+            seen.add(head)
+            out.append(head)
+    return out
+
+
+def parse_lineup_final_hero_names_from_v1(doc: Dict[str, Any]) -> List[str]:
+    """从 lineup_v1 的 build_levels 中取最高人口段的棋子列表（用于目标缺口）。"""
+    bl = doc.get("build_levels")
+    if not isinstance(bl, list) or not bl:
+        return []
+    best_row: Optional[Dict[str, Any]] = None
+    best_lv = -1
+    for row in bl:
+        if not isinstance(row, dict):
+            continue
+        try:
+            lv = int(row.get("level") or 0)
+        except (TypeError, ValueError):
+            lv = 0
+        if lv > best_lv:
+            best_lv = lv
+            best_row = row
+    if not best_row:
+        return []
+    pcs = str(best_row.get("pieces") or "")
+    return _parse_piece_names_from_v1_pieces_string(pcs)
+
+
 def hero_name_matches_board(hero: str, board_names: List[str]) -> bool:
     h = hero.strip()
     if not h:
@@ -600,13 +644,18 @@ def retrieve_core_chess_rag(
         }
         for gu in guajia_entries
     ]
+    discard_meta_rows: List[Dict[str, Any]] = []
 
     if has_top1:
         doc = lineup_top_doc or {}
         ltid = str(doc.get("lineup_id") or "")
-        lname = str(doc.get("name") or ltid)
+        lname = str(doc.get("name") or doc.get("name_short") or ltid)
         ltext = str(doc.get("text") or "")
-        need_names = parse_lineup_final_hero_names(ltext)
+        if ltext.strip():
+            need_names = parse_lineup_final_hero_names(ltext)
+        else:
+            need_names = parse_lineup_final_hero_names_from_v1(doc)
+        need_names = [str(x).strip() for x in need_names if str(x).strip()]
         missing = [h for h in need_names if not hero_name_matches_board(h, board_name_list)]
 
         for h in missing:
@@ -667,10 +716,39 @@ def retrieve_core_chess_rag(
                 cs = f"{int(c)}费" if c is not None else "?费"
                 blocks.append(f"  - {h} | {cs} | {rl}")
             blocks.append("")
+
+        # 弃子清单规则（按需求变更）：
+        # 1) 当前阵容的挂件进入弃子清单；
+        # 2) 当前阵容的打工仔，若未出现在推荐阵容中，也进入弃子清单。
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            disp = board_line_hero_display_name(r)
+            lk = disp.rstrip("?").rstrip("？").strip()
+            slot_tag, cost = slot_role_and_cost_for_name(lk, core, legend_map)
+            if slot_tag == "挂件":
+                pass
+            elif slot_tag == "打工仔":
+                if not need_names:
+                    continue
+                if hero_name_matches_board(lk, need_names):
+                    continue
+            else:
+                continue
+            star_seg = star_display_segment(r, star_by_bar)
+            cs = f"{int(cost)}费" if cost is not None else "?费"
+            discard_meta_rows.append(
+                {
+                    "display": disp,
+                    "star_seg": star_seg,
+                    "cost_str": cs,
+                    "slot_role": slot_tag,
+                }
+            )
     else:
         blocks.append("【棋子智库】")
         blocks.append("")
-        blocks.append("未命中阵容智库 Top1，一、二及目标缺口从略。")
+        blocks.append("未命中阵容检索 Top1，一、二及目标缺口从略。")
         blocks.append("")
 
     board_carries: List[Tuple[str, str]] = []
@@ -701,6 +779,7 @@ def retrieve_core_chess_rag(
             "missing_lt4": missing_lt4,
             "missing_unknown_cost": missing_unknown_cost,
             "board_guajia": guajia_meta_rows,
+            "board_discard": discard_meta_rows,
             "equipment_inheritance": w_meta,
         }
     )

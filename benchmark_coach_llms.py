@@ -8,7 +8,7 @@
   python benchmark_coach_llms.py --summary-json runs/battle_pipeline_v3_out/01-a_summary.json
   python benchmark_coach_llms.py --models "google/gemini-2.5-flash,anthropic/claude-haiku-4.5"
 
-依赖：.env 中 OPENROUTER_API_KEY；可选 data/rag_lineup_lineup.jsonl、data/rag_core_chess.jsonl。
+依赖：.env 中 OPENROUTER_API_KEY；可选 data/rag_lineup_lineup_v1.jsonl、data/rag_core_chess.jsonl。
 
 说明：OpenRouter 上的 model id 会变更；若某模型 404，请改 --models 或到 https://openrouter.ai/models 核对。
 """
@@ -21,6 +21,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -50,48 +51,14 @@ DEFAULT_QUESTIONS = [
 def _build_user_block(
     brief: str, rag_lineup: str, rag_chess: str, question: str
 ) -> str:
-    """与 gemini_v1._coach_first_user_message 一致：对局情报 + 阵容攻略附录，不重复棋子智库全文。"""
+    """与 gemini_v1._coach_first_user_message 一致：仅【对局情报】（阵容与目标棋子已写入战报）。"""
+    _ = rag_lineup
     _ = rag_chess
     parts = [
         "【哈基星问题】\n" + question.strip(),
         "【对局情报】\n" + brief.strip(),
     ]
-    rl = (rag_lineup or "").strip()
-    if rl and not rl.startswith("（本回合未注入"):
-        parts.append("【阵容攻略原文（附录）】\n" + rl)
     return "\n\n".join(parts)
-
-
-def _build_rag_blocks(
-    summary: Dict[str, Any],
-    *,
-    rag_lineup: Path,
-    rag_core: Path,
-    rag_top_k: int,
-    rag_chess_top_k: int,
-    rag_min_quality: Optional[str],
-) -> Tuple[str, str]:
-    min_q: Optional[str] = None
-    if (rag_min_quality or "").strip():
-        t = str(rag_min_quality).strip().upper()
-        c = t[0] if t else ""
-        min_q = c if c in gv._LINEUP_QUALITY_ORDER else None
-    lineup_block, _, _, lineup_docs = gv.retrieve_lineup_rag(
-        summary,
-        rag_lineup,
-        top_k=max(1, rag_top_k),
-        min_quality=min_q,
-    )
-    lineup_top1 = lineup_docs[0] if lineup_docs else None
-    core_block, _, _ = gv.retrieve_core_chess_rag(
-        summary,
-        rag_core.resolve(),
-        top_k=max(1, rag_chess_top_k),
-        lineup_top_doc=lineup_top1,
-        legend_chess_path=gv.DEFAULT_RAG_LEGEND_CHESS,
-        summary_json_path=None,
-    )
-    return lineup_block, core_block
 
 
 def _estimate_network_jitter_s(base: str, key: str, tries: int = 3) -> float:
@@ -194,17 +161,18 @@ def main() -> None:
     if not sp.is_file():
         raise SystemExit(f"找不到 summary: {sp}")
 
-    summary = json.loads(sp.read_text(encoding="utf-8"))
-    brief = gv.build_tactical_brief(summary, summary_json_path=sp)
-    mq = args.rag_min_quality if str(args.rag_min_quality).strip() else None
-    lineup_rag, chess_rag = _build_rag_blocks(
-        summary,
+    coach_args = SimpleNamespace(
         rag_lineup=args.rag_lineup.resolve(),
-        rag_core=args.rag_core_chess.resolve(),
         rag_top_k=args.rag_top_k,
+        rag_min_quality=args.rag_min_quality,
+        rag_core_chess=args.rag_core_chess.resolve(),
         rag_chess_top_k=args.rag_chess_top_k,
-        rag_min_quality=mq,
+        no_rag=False,
     )
+    bundle = gv.build_coach_bundle(coach_args, sp.resolve())
+    brief = str(bundle.get("brief") or "")
+    lineup_rag = str(bundle.get("rag_block") or "")
+    chess_rag = str(bundle.get("chess_block") or "")
 
     if args.models.strip():
         ids = [x.strip() for x in args.models.split(",") if x.strip()]
