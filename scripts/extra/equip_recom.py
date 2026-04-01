@@ -229,7 +229,12 @@ def _fallback_carry(ap_carry: bool) -> Dict[str, List[str]]:
         "violent_ad": ["无尽之刃", "巨人捕手", "锐利之刃"],
         "shred": ["最后的轻语", "虚空之杖", "薄暮法袍"],
         "violent": ["珠光护手", "无尽之刃", "巨人捕手"] if not ap_carry else ["珠光护手", "班克斯的魔法帽", "大天使之杖"],
-        "violent_or_shred": ["最后的轻语", "虚空之杖", "珠光护手", "无尽之刃"],
+        # AP 主C 优先法穿（虚空之杖），AD 主C 优先破甲（最后的轻语）
+        "violent_or_shred": (
+            ["虚空之杖", "最后的轻语", "珠光护手", "无尽之刃"]
+            if ap_carry
+            else ["最后的轻语", "虚空之杖", "无尽之刃", "珠光护手"]
+        ),
     }
 
 

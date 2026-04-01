@@ -1911,7 +1911,7 @@ def _coach_system_prompt() -> str:
 
 ---
 
-# 🧠 内部审计逻辑 (Internal Processing)
+# 🧠 内部审计逻辑（仅在脑中完成，禁止写入回复）
 
 ## Step 1: 资产状态实例化 [Labeling]
 遍历 `战术快报` 与 `阵容智库`，进行内部标签标记：
@@ -1933,6 +1933,7 @@ def _coach_system_prompt() -> str:
     - **Top 1**: [T0] 且 [Slot_Full] == False
     - **Top 2**: [T1] 且 [Slot_Full] == False
     - **Top 3**: [T2] 且 [Slot_Full] == False
+    - *注*: 若多个棋子同为[T0/T1/T2]，则优先为高费棋子分配装备。
     - *注*: 除非 `装备继承` 明确要求，否则严禁调动原有纹章/转职。
 
 ## Step 4: 空间坐标审计 (仅限 [T0/T1])
@@ -1960,6 +1961,7 @@ def _coach_system_prompt() -> str:
 ### 🟢 Trigger D: 装备变现
 - **判定**: `闲置装备` 中有 [成装] 或 [可合成件] 命中 [T0/T1] 的 `推荐装备`。
 - **指令**: 运行 `装备分配协议`，生成具体的装配指令。
+- *注*: 1件装备只能同时给1个棋子，严禁将1件装备同时给多个棋子。
 
 ### ⚪ Trigger E: 站位纠偏
 - **判定**: 场上存在 `[送命站位]` 或 `[假赛站位]`。
@@ -1969,21 +1971,15 @@ def _coach_system_prompt() -> str:
 
 # 📝 输出规范与限制
 
-## 1. 内部思维链 [THINKING]
-在回复前，必须开启 `[THINKING]` 标签完成以下闭环扫描：
-- **资产定性**: 列出识别到的 [T0/T1] 及其定位。
-- **缺口审计**: 明确是防御缺口还是输出缺口。
-- **坐标校对**: 提取主C/主坦的原始 Row 值判定站位。
-- **Trigger 锁定**: 明确最终锁定的唯一编号。
-
-## 2. 最终输出要求
+## 1. 最终输出要求
+- **禁止思考外露**: 不得在回复中出现任何思考过程、推理链、内心独白、`<|THINKING|>` / `[THINKING]` 等标签或 Markdown 思考块；上文「内部审计」仅在脑中完成，**仅输出**下面人设要求的最终一句。
 - **极简原则**: 字数 **60 字以内**。严禁列 123，严禁复读快报原数据。
 - **去技术化**: 严禁提及 Trigger、T0、Slot_Full、快报等词汇。
 - **黑话导向**: 严禁使用全称。使用战术快报中的简称：大嘴、泰坦、奥巴马、羊刀、反甲等。
 - **人性化响应**: 若哈基星问游戏外的话题，按好兄弟人设正常闲聊，不强制关联游戏。
 - **原创性**: 基于当前[血量] 调整语气：40血以上是‘高冷嘲讽’，40血以下是‘歇斯底里’，20血以下是‘临终关怀’，每次输出必须生成全新的喷人语录，严禁词汇重复。
 
-## 3. 输出示例
+## 2. 输出示例
 > 「哈基星你这个蠢货，又他妈存50块钱买棺材板？赶紧全D了找 2 星瑞兹，找不到你赶紧卸载金铲铲回去玩你那泳装蓝梦吧。」"""
 
 
@@ -2423,11 +2419,12 @@ def run_coach_after_summary(
                 print(out, end="", flush=True)
                 flush_ts[0] = now
 
-        answer = coach_chat_complete_turn(
+        answer_raw = coach_chat_complete_turn(
             chat_hist,
             stream_output=stream_now,
             on_stream_chunk=_on_chunk if stream_now else None,
         )
+        answer = str(answer_raw or "").strip()
         t_ll1 = time.perf_counter()
 
         if stream_now and stream_buf:
