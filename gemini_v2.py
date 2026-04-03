@@ -1,10 +1,9 @@
- 
- # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 gemini_v1 同款流水线与教练对话，交互问题改为：**按一次空格** 开始录音（仅提示录音中，不显示实时文字）→ **回车** 结束录音，
-录音时 **边录边识别**（WebSocket v2 流式协议），按【回车】结束并发送尾包后立即取最终结果；若流式不可用则回退 HTTP flash 整段识别。
+录音时 **边录边识别**（WebSocket v3 流式协议），按【回车】结束并发送尾包后立即取最终结果。
 
-流式 ASR 仍属豆包/-openspeech 体系（与文档「流式语音识别」一致，控制台需开通流式识别并配置 cluster）。
+流式 ASR 仅使用豆包流式语音识别模型2.0（v3 API WebSocket），不再使用HTTP Flash方法。
 
 仍可编辑 data/gemini_v2_asr_glossary.json 做误识别→正写替换（长短语优先匹配）。
 
@@ -19,10 +18,9 @@ LLM：默认**流式**输出（OpenRouter 与 Google 直连均走流式接口）
 说完按回车后再请求 LLM，从而把 RAG 耗时叠进说话时间里（pipeline 分支仍须等识别完才有 summary，无法与 RAG 并行）。
 仅发「战报+RAG」而不带问题的**额外一次** LLM 请求在没有「上下文缓存」API 时一般**更慢**，故未实现。
 
-豆包 ASR 凭证（与 TTS 的 App Id / Access Key 一般为同一套控制台凭证；也可用独立环境变量覆盖）：
+豆包 ASR 凭证（与 TTS 的 App Id / Access Key 一般为同一套控制台凭证）：
   DOUBAO_ASR_APP_KEY（或回退 DOUBAO_TTS_APP_ID）
   DOUBAO_ASR_ACCESS_KEY（或回退 DOUBAO_TTS_ACCESS_KEY）
-  DOUBAO_ASR_RESOURCE_ID（HTTP flash 回退用，默认 volc.bigasr.auc_turbo）
   DOUBAO_ASR_WS_CLUSTER（WebSocket 流式 cluster，默认 volcengine_streaming_common）
 
 示例：
@@ -124,65 +122,7 @@ def _pcm_float32_to_wav_bytes(pcm_f32: Any, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
-def _doubao_asr_recognize_flash(
-    *,
-    wav_bytes: bytes,
-    app_key: str,
-    access_key: str,
-    resource_id: str,
-    timeout_sec: float,
-) -> str:
-    """
-    豆包大模型录音极速识别（flash），与 openspeech v3 协议一致；音频为整段 WAV base64。
-    """
-    try:
-        import requests
-    except ImportError as e:
-        raise SystemExit("未安装 requests。请执行： pip install requests") from e
-
-    url = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
-    req_id = str(uuid.uuid4())
-    headers = {
-        "X-Api-App-Key": app_key,
-        "X-Api-Access-Key": access_key,
-        "X-Api-Resource-Id": resource_id,
-        "X-Api-Request-Id": req_id,
-        "X-Api-Sequence": "-1",
-        "Content-Type": "application/json",
-    }
-    body: Dict[str, Any] = {
-        "user": {"uid": app_key},
-        "audio": {"data": base64.b64encode(wav_bytes).decode("ascii")},
-        "request": {
-            "model_name": "bigmodel",
-            "model_version": "400",
-            "enable_itn": True,
-            "enable_punc": True,
-            "enable_ddc": True,
-            "show_utterances": True,
-            "enable_speaker_info": True,
-        },
-    }
-    r = requests.post(url, headers=headers, json=body, timeout=timeout_sec)
-    r.raise_for_status()
-    code = str(r.headers.get("X-Api-Status-Code") or "")
-    if code != "20000000":
-        msg = r.headers.get("X-Api-Message") or (r.text or "")[:400]
-        raise RuntimeError(f"豆包 ASR 失败 status={code!r} message={msg!r}")
-    data = r.json()
-    utterances = (data.get("result") or {}).get("utterances") or []
-    parts: List[str] = []
-    for u in utterances:
-        if isinstance(u, dict):
-            t = str(u.get("text") or "").strip()
-            if t:
-                parts.append(t)
-    if parts:
-        return " ".join(parts).strip()
-    return str((data.get("result") or {}).get("text") or "").strip()
-
-
-# ---- 豆包流式 ASR（WebSocket /api/v2/asr，二进制协议，与火山示例一致）----
+# ---- 豆包流式 ASR（WebSocket，v3 API，二进制协议）----
 
 _ASR_WS_PROTO_VER = 0b0001
 _ASR_WS_CLIENT_FULL = 0b0001
@@ -193,6 +133,7 @@ _ASR_WS_SERVER_ERR = 0b1111
 _ASR_WS_FLAG_NONE = 0b0000
 _ASR_WS_FLAG_LAST = 0b0010
 _ASR_WS_JSON = 0b0001
+_ASR_WS_NONE = 0b0000
 _ASR_WS_GZIP = 0b0001
 _ASR_WS_SUCCESS = 1000
 
@@ -200,11 +141,13 @@ _ASR_WS_SUCCESS = 1000
 def _asr_ws_header(
     message_type: int,
     flags: int = _ASR_WS_FLAG_NONE,
+    serialization: int = _ASR_WS_JSON,
+    compression: int = _ASR_WS_GZIP,
 ) -> bytearray:
     hb = bytearray()
     hb.append((_ASR_WS_PROTO_VER << 4) | 1)
     hb.append((message_type << 4) | flags)
-    hb.append((_ASR_WS_JSON << 4) | _ASR_WS_GZIP)
+    hb.append((serialization << 4) | compression)
     hb.append(0x00)
     return hb
 
@@ -220,13 +163,18 @@ def _asr_ws_parse_message(res: bytes) -> Dict[str, Any]:
     out: Dict[str, Any] = {"message_type": message_type}
     payload_msg = None
     payload_size = 0
+    print(f"[ASR_PARSE] header_size={header_size}, message_type={message_type}, serialization={serialization_method}, compression={message_compression}, payload_len={len(payload)}", flush=True)
     if message_type == _ASR_WS_SERVER_FULL:
-        if len(payload) < 4:
+        if len(payload) < 8:  # 需要 sequence (4B) + payload_size (4B)
+            print(f"[ASR_PARSE] SERVER_FULL payload 太短: {len(payload)}", flush=True)
             return out
-        payload_size = int.from_bytes(payload[:4], "big", signed=True)
-        payload_msg = payload[4:]
+        seq = int.from_bytes(payload[:4], "big", signed=True)
+        payload_size = int.from_bytes(payload[4:8], "big", signed=False)
+        print(f"[ASR_PARSE] SERVER_FULL seq={seq}, payload_size={payload_size}", flush=True)
+        payload_msg = payload[8:]
     elif message_type == _ASR_WS_SERVER_ACK:
-        if len(payload) >= 8:
+        if len(payload) >= 12:
+            seq = int.from_bytes(payload[:4], "big", signed=True)
             payload_size = int.from_bytes(payload[4:8], "big", signed=False)
             payload_msg = payload[8:]
     elif message_type == _ASR_WS_SERVER_ERR:
@@ -236,36 +184,50 @@ def _asr_ws_parse_message(res: bytes) -> Dict[str, Any]:
             out["error_code"] = code
             payload_msg = payload[8 : 8 + payload_size]
     if payload_msg is None:
+        print(f"[ASR_PARSE] payload_msg 为 None", flush=True)
         return out
+    print(f"[ASR_PARSE] payload_msg len={len(payload_msg)}", flush=True)
     if message_compression == _ASR_WS_GZIP:
         try:
             payload_msg = gzip.decompress(payload_msg)
-        except Exception:
+            print(f"[ASR_PARSE] 解压后长度={len(payload_msg)}", flush=True)
+        except Exception as e:
+            print(f"[ASR_PARSE] 解压失败: {e}", flush=True)
             return out
     if serialization_method == _ASR_WS_JSON:
         try:
             out["payload_msg"] = json.loads(str(payload_msg, "utf-8"))
-        except Exception:
-            pass
+            print(f"[ASR_PARSE] JSON 解析成功，code={out['payload_msg'].get('code')}", flush=True)
+        except Exception as e:
+            print(f"[ASR_PARSE] JSON 解析失败: {e}", flush=True)
     return out
 
 
 def _asr_ws_text_from_payload(pm: Any) -> str:
     if not isinstance(pm, dict):
         return ""
-    if int(pm.get("code", -1)) != _ASR_WS_SUCCESS:
+    
+    # 如果有 code 字段，检查是否成功（旧API兼容）
+    code = pm.get("code")
+    if code is not None and code != _ASR_WS_SUCCESS:
         return ""
+    
     res = pm.get("result")
-    if not isinstance(res, list):
+    if not isinstance(res, dict):
+        # 旧API可能是列表格式
+        if isinstance(res, list):
+            parts = []
+            for item in res:
+                if isinstance(item, dict):
+                    t = str(item.get("text") or "").strip()
+                    if t:
+                        parts.append(t)
+            return " ".join(parts).strip()
         return ""
-    parts: List[str] = []
-    for item in res:
-        if not isinstance(item, dict):
-            continue
-        t = str(item.get("text") or "").strip()
-        if t:
-            parts.append(t)
-    return " ".join(parts).strip()
+    
+    # v3 API 是字典格式，直接取 text 字段
+    t = str(res.get("text") or "").strip()
+    return t
 
 
 def _asr_ws_stream_run(
@@ -288,51 +250,71 @@ def _asr_ws_stream_run(
             "流式 ASR 需要 websocket-client： pip install websocket-client"
         ) from e
 
-    ws_url = "wss://openspeech.bytedance.com/api/v2/asr"
-    reqid = str(uuid.uuid4())
+    # 使用 v3 API with hardcoded credentials
+    ws_url = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
+    connect_id = str(uuid.uuid4())
+    seq = 1  # 序列号从1开始
+    
     req_body: Dict[str, Any] = {
-        "app": {"appid": appid, "cluster": cluster, "token": token},
         "user": {"uid": uid},
-        "request": {
-            "reqid": reqid,
-            "nbest": 1,
-            "workflow": workflow,
-            "show_language": False,
-            "show_utterances": True,
-            "result_type": "full",
-            "sequence": 1,
-        },
         "audio": {
-            "format": "raw",
+            "format": "pcm",
             "rate": sample_rate,
             "language": "zh-CN",
             "bits": 16,
             "channel": 1,
             "codec": "raw",
         },
+        "request": {
+            "model_name": "bigmodel",
+            "enable_itn": True,
+            "enable_punc": True,
+            "enable_ddc": True,
+            "show_utterances": True,
+            "result_type": "full",
+        },
     }
     payload_b = gzip.compress(json.dumps(req_body).encode("utf-8"))
-    full_req = bytearray(_asr_ws_header(_ASR_WS_CLIENT_FULL))
+    # Full client request: header + seq (4B) + payload_size (4B) + payload
+    full_req = bytearray(_asr_ws_header(_ASR_WS_CLIENT_FULL, flags=0b0001))  # POS_SEQUENCE flag
+    full_req.extend(seq.to_bytes(4, "big", signed=True))  # 序列号（正数）
     full_req.extend(len(payload_b).to_bytes(4, "big"))
     full_req.extend(payload_b)
+    seq += 1  # 发送完full request后递增
 
-    auth = "Bearer; {}".format(token)
+    # v3 API uses header-based authentication
+    print(f"[ASR] 连接到 {ws_url}", flush=True)
     ws = websocket.create_connection(
         ws_url,
-        header=[f"Authorization: {auth}"],
+        header=[
+            "X-Api-App-Key: 3491963725",
+            "X-Api-Access-Key: dqbpiqoB26POmsIca81QFzhWX25N6rdS",
+            "X-Api-Resource-Id: volc.bigasr.sauc.duration",
+            f"X-Api-Connect-Id: {connect_id}",
+        ],
         timeout=30,
     )
+    print(f"[ASR] WebSocket 连接成功", flush=True)
     latest = ""
     try:
+        print(f"[ASR] 发送 full client request，seq={seq-1}，payload_size={len(payload_b)}", flush=True)
         ws.send_binary(bytes(full_req))
         pm = None
-        for _ in range(4):
-            raw = ws.recv()
-            pr = _asr_ws_parse_message(raw)
-            pm = pr.get("payload_msg")
-            if isinstance(pm, dict):
-                break
-        if not isinstance(pm, dict) or int(pm.get("code", -1)) != _ASR_WS_SUCCESS:
+        for i in range(4):
+            try:
+                raw = ws.recv()
+                print(f"[ASR] 收到响应包 #{i}, 大小 {len(raw)} 字节", flush=True)
+                pr = _asr_ws_parse_message(raw)
+                print(f"[ASR] 解析响应: message_type={pr.get('message_type')}", flush=True)
+                pm = pr.get("payload_msg")
+                if isinstance(pm, dict):
+                    print(f"[ASR] Full request 成功，code={pm.get('code')}", flush=True)
+                    break
+            except Exception as e:
+                print(f"[ASR] 接收/解析响应 #{i} 出错: {e}", flush=True)
+                raise
+        # v3 API 初始化成功后直接返回识别结果，无 code 字段；检查 result 字段
+        if not isinstance(pm, dict) or "result" not in pm:
             raise RuntimeError(
                 f"ASR 初始化失败: {pm!r}"
             )
@@ -371,41 +353,57 @@ def _asr_ws_stream_run(
             piece = bytes(buf[:take])
             del buf[:take]
             zip_b = gzip.compress(piece)
-            pkt = bytearray(_asr_ws_header(_ASR_WS_CLIENT_AUDIO))
+            pkt = bytearray(_asr_ws_header(_ASR_WS_CLIENT_AUDIO, flags=0b0001, serialization=_ASR_WS_NONE, compression=_ASR_WS_GZIP))  # POS_SEQUENCE
+            pkt.extend(seq.to_bytes(4, "big", signed=True))  # 序列号（正数）
             pkt.extend(len(zip_b).to_bytes(4, "big"))
             pkt.extend(zip_b)
+            print(f"[ASR] 发送音频包 seq={seq}, 原始={len(piece)}B 压缩={len(zip_b)}B", flush=True)
+            seq += 1
             ws.send_binary(bytes(pkt))
-            raw2 = ws.recv()
-            pr2 = _asr_ws_parse_message(raw2)
-            pm2 = pr2.get("payload_msg")
-            t = _asr_ws_text_from_payload(pm2)
-            if t:
-                latest = t
-                live_log(t)
+            try:
+                raw2 = ws.recv()
+                print(f"[ASR] 收到音频响应，大小 {len(raw2)} 字节", flush=True)
+                pr2 = _asr_ws_parse_message(raw2)
+                pm2 = pr2.get("payload_msg")
+                t = _asr_ws_text_from_payload(pm2)
+                if t:
+                    print(f"[ASR] 识别结果: {t}", flush=True)
+                    latest = t
+                    live_log(t)
+            except Exception as e:
+                print(f"[ASR] 接收音频响应出错: {e}", flush=True)
+                raise
 
         zip_last = gzip.compress(bytes(buf)) if buf else gzip.compress(b"")
         pkt_l = bytearray(
-            _asr_ws_header(_ASR_WS_CLIENT_AUDIO, _ASR_WS_FLAG_LAST)
+            _asr_ws_header(_ASR_WS_CLIENT_AUDIO, flags=0b0011, serialization=_ASR_WS_NONE, compression=_ASR_WS_GZIP)  # NEG_WITH_SEQUENCE
         )
+        pkt_l.extend((-seq).to_bytes(4, "big", signed=True))  # 序列号（负数表示最后一包）
         pkt_l.extend(len(zip_last).to_bytes(4, "big"))
         pkt_l.extend(zip_last)
+        print(f"[ASR] 发送最后一包，seq={-seq}, 大小={len(zip_last)}B", flush=True)
         ws.send_binary(bytes(pkt_l))
+        print(f"[ASR] 等待最终响应...", flush=True)
         try:
             ws.settimeout(3.0)
         except Exception:
             pass
-        for _ in range(5):
+        for i in range(5):
             try:
                 raw_l = ws.recv()
-            except Exception:
+                print(f"[ASR] 收到最终响应 #{i}, 大小 {len(raw_l)} 字节", flush=True)
+                pr_l = _asr_ws_parse_message(raw_l)
+                pm_l = pr_l.get("payload_msg")
+                t2 = _asr_ws_text_from_payload(pm_l)
+                if t2:
+                    print(f"[ASR] 最终识别结果: {t2}", flush=True)
+                    latest = t2
+            except Exception as e:
+                print(f"[ASR] 接收最终响应出错: {e}", flush=True)
                 break
-            pr_l = _asr_ws_parse_message(raw_l)
-            pm_l = pr_l.get("payload_msg")
-            t2 = _asr_ws_text_from_payload(pm_l)
-            if t2:
-                latest = t2
     finally:
         try:
+            print(f"[ASR] 关闭 WebSocket 连接，最终识别结果: {latest}", flush=True)
             ws.close()
         except Exception:
             pass
@@ -696,7 +694,7 @@ class VoiceSession:
         asr_glossary: Optional[Dict[str, str]] = None,
         doubao_asr_app_key: str = "",
         doubao_asr_access_key: str = "",
-        doubao_asr_resource_id: str = "volc.bigasr.auc_turbo",
+        doubao_asr_resource_id: str = "volc.bigasr.sauc.duration",
         asr_timeout_sec: float = 120.0,
         doubao_asr_ws_cluster: str = "volcengine_streaming_common",
         asr_chunk_ms: int = 100,
@@ -732,15 +730,8 @@ class VoiceSession:
         """豆包 ASR 无本地权重加载；预留钩子便于以后做连通性预检。"""
 
     def _resolve_asr_creds(self) -> tuple[str, str]:
-        app_key = self.doubao_asr_app_key or os.getenv("DOUBAO_ASR_APP_KEY", "").strip()
-        if not app_key:
-            app_key = os.getenv("DOUBAO_TTS_APP_ID", "").strip()
-        access = self.doubao_asr_access_key or os.getenv(
-            "DOUBAO_ASR_ACCESS_KEY", ""
-        ).strip()
-        if not access:
-            access = os.getenv("DOUBAO_TTS_ACCESS_KEY", "").strip()
-        return app_key, access
+        # Hardcoded credentials for v3 API
+        return "3491963725", "dqbpiqoB26POmsIca81QFzhWX25N6rdS"
 
     def _live_asr_log(self, text: str) -> None:
         now = time.perf_counter()
@@ -775,43 +766,11 @@ class VoiceSession:
         return text
 
     def _transcribe(self, audio) -> str:
-        import numpy as np
-
-        if audio is None or audio.size < int(self.SR * 0.22):
-            return ""
-        app_key = self.doubao_asr_app_key or os.getenv("DOUBAO_ASR_APP_KEY", "").strip()
-        if not app_key:
-            app_key = os.getenv("DOUBAO_TTS_APP_ID", "").strip()
-        access = self.doubao_asr_access_key or os.getenv(
-            "DOUBAO_ASR_ACCESS_KEY", ""
-        ).strip()
-        if not access:
-            access = os.getenv("DOUBAO_TTS_ACCESS_KEY", "").strip()
-        res_id = (
-            self.doubao_asr_resource_id
-            or os.getenv("DOUBAO_ASR_RESOURCE_ID", "").strip()
-            or "volc.bigasr.auc_turbo"
-        )
-        if not app_key or not access:
-            print(
-                "[gemini_v2][ASR] 缺少豆包凭证：需 DOUBAO_ASR_APP_KEY（或 DOUBAO_TTS_APP_ID）"
-                " 与 DOUBAO_ASR_ACCESS_KEY（或 DOUBAO_TTS_ACCESS_KEY）。",
-                flush=True,
-            )
-            return ""
-        wav_bytes = _pcm_float32_to_wav_bytes(audio, self.SR)
-        try:
-            raw = _doubao_asr_recognize_flash(
-                wav_bytes=wav_bytes,
-                app_key=app_key,
-                access_key=access,
-                resource_id=res_id,
-                timeout_sec=self.asr_timeout_sec,
-            )
-        except Exception as e:
-            print(f"[gemini_v2][ASR] 豆包识别异常: {e}", flush=True)
-            return ""
-        return self._asr_postprocess(raw)
+        """
+        备用整段识别方法（已改为只使用流式识别）。
+        如果流式识别失败，建议重新录音而不是尝试其他方法。
+        """
+        return ""
 
     def run(self, banner: str) -> str:
         try:
@@ -1080,7 +1039,7 @@ class TTSPlayer:
 
         app_id = self.doubao_app_id or os.getenv("DOUBAO_TTS_APP_ID", "").strip()
         access_key = self.doubao_access_key or os.getenv("DOUBAO_TTS_ACCESS_KEY", "").strip()
-        resource_id = self.doubao_resource_id or os.getenv("DOUBAO_TTS_RESOURCE_ID", "seed-tts-2.0").strip()
+        resource_id = self.doubao_resource_id or os.getenv("DOUBAO_TTS_RESOURCE_ID", "seed-tts-1.0").strip()
         speaker = self.doubao_speaker or os.getenv("DOUBAO_TTS_SPEAKER", "").strip()
         uid = self.doubao_uid or os.getenv("DOUBAO_TTS_UID", "gemini_v2").strip()
         if not app_id or not access_key or not speaker:
@@ -1097,11 +1056,13 @@ class TTSPlayer:
             "X-Api-Resource-Id": resource_id,
             "X-Api-Request-Id": str(uuid.uuid4()),
             "Content-Type": "application/json",
+            "Connection": "keep-alive",
         }
         aparam: Dict[str, Any] = {
             "format": audio_format,
             "sample_rate": self.doubao_sample_rate,
             "speech_rate": _doubao_tts_speech_rate_from_speed(self.speed),
+            "enable_timestamp": True,
         }
         if abs(self.doubao_loudness - 1.0) > 0.01:
             aparam["loudness_ratio"] = float(self.doubao_loudness)
@@ -1140,6 +1101,7 @@ class TTSPlayer:
                 continue
             code = int(obj.get("code", -1))
             if code == 0:
+                # 处理音频数据
                 b64 = obj.get("data")
                 if isinstance(b64, str) and b64:
                     try:
@@ -1151,11 +1113,22 @@ class TTSPlayer:
                         collect.append(chunk)
                     if on_pcm_chunk is not None:
                         on_pcm_chunk(chunk)
+                    continue
+                # 处理时间戳数据（sentence_data）
+                if "sentence" in obj and obj.get("sentence"):
+                    continue
             elif code == 20000000:
+                # 合成完成，可包含usage统计信息
                 break
             else:
                 msg = str(obj.get("message") or "unknown")
-                raise RuntimeError(f"豆包 TTS 返回异常 code={code} message={msg}")
+                hint = ""
+                if code == 55000000 and "resource" in msg.lower() and "speaker" in msg.lower():
+                    hint = "\n  【诊断】Resource ID 与 Speaker 不匹配。检查：\n" \
+                           "   • 若 speaker 是模型1.0音色（如 zh_female_*_moon_bigtts），需 resource_id=seed-tts-1.0\n" \
+                           "   • 若 speaker 是模型2.0音色（如 saturn_* 开头），需 resource_id=seed-tts-2.0\n" \
+                           "   • 使用 --doubao-tts-resource-id 或环境变量 DOUBAO_TTS_RESOURCE_ID 修改"
+                raise RuntimeError(f"豆包 TTS 返回异常 code={code} message={msg}{hint}")
         return got
 
     def _call_doubao_tts_buffered(self, text: str) -> Optional[Dict[str, Any]]:
@@ -1314,8 +1287,8 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--doubao-asr-resource-id",
-        default="volc.bigasr.auc_turbo",
-        help="豆包ASR: X-Api-Resource-Id（默认 volc.bigasr.auc_turbo，大模型极速识别）",
+        default="volc.bigasr.sauc.duration",
+        help="豆包ASR: X-Api-Resource-Id（默认 volc.bigasr.sauc.duration）",
     )
     ap.add_argument(
         "--asr-timeout",
@@ -1419,13 +1392,13 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--doubao-tts-resource-id",
-        default="",
-        help="豆包TTS: 资源ID（默认读环境变量 DOUBAO_TTS_RESOURCE_ID；若未设置则回退 seed-tts-2.0）",
+        default="seed-tts-1.0",  # Doubao TTS 1.0 model
+        help="豆包TTS: 资源ID（默认 seed-tts-1.0，用于模型1.0音色；若使用模型2.0音色需改为 seed-tts-2.0）",
     )
     ap.add_argument(
         "--doubao-tts-speaker",
         default="",
-        help="豆包TTS: 音色 speaker（必填，可在音色列表中选）",
+        help="豆包TTS: 音色 speaker（必填；需与 resource-id 配对：1.0音色用 seed-tts-1.0，2.0音色用 seed-tts-2.0）",
     )
     ap.add_argument(
         "--doubao-tts-uid",
