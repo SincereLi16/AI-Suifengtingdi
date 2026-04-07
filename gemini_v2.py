@@ -1,4 +1,9 @@
-# -*- coding: utf-8 -*-
+ 
+   
+   
+   
+    
+    # -*- coding: utf-8 -*-
 """
 gemini_v1 同款流水线与教练对话，交互问题改为：**按一次空格** 开始录音（仅提示录音中，不显示实时文字）→ **回车** 结束录音，
 录音时 **边录边识别**（WebSocket v3 流式协议），按【回车】结束并发送尾包后立即取最终结果。
@@ -8,6 +13,11 @@ gemini_v1 同款流水线与教练对话，交互问题改为：**按一次空�
 仍可编辑 data/gemini_v2_asr_glossary.json 做误识别→正写替换（长短语优先匹配）。
 
 LLM：默认**流式**输出（OpenRouter 与 Google 直连均走流式接口）；TTS：豆包 v3 流式拉取音频块并边下边播。
+
+当前模型版本（v2，按当前可跑通配置）：
+  - ASR：豆包流式 ASR 2.0（v3 协议，model_name=bigmodel）
+  - TTS：声音复刻模型 2.0（字符版）
+  - Speaker：S_XL8NxUsY1（复刻音色）
 
 依赖（需额外安装）：
   pip install sounddevice numpy pynput requests websocket-client
@@ -152,7 +162,10 @@ def _asr_ws_header(
     return hb
 
 
-def _asr_ws_parse_message(res: bytes) -> Dict[str, Any]:
+_ASR_VERBOSE = True  # 设为 False 可关闭 ASR 调试日志（提升性能）
+
+
+def _asr_ws_parse_message(res: bytes, verbose: bool = False) -> Dict[str, Any]:
     if len(res) < 4:
         return {}
     header_size = res[0] & 0x0F
@@ -163,14 +176,17 @@ def _asr_ws_parse_message(res: bytes) -> Dict[str, Any]:
     out: Dict[str, Any] = {"message_type": message_type}
     payload_msg = None
     payload_size = 0
-    print(f"[ASR_PARSE] header_size={header_size}, message_type={message_type}, serialization={serialization_method}, compression={message_compression}, payload_len={len(payload)}", flush=True)
+    if verbose:
+        print(f"[ASR_PARSE] header_size={header_size}, message_type={message_type}, serialization={serialization_method}, compression={message_compression}, payload_len={len(payload)}", flush=True)
     if message_type == _ASR_WS_SERVER_FULL:
         if len(payload) < 8:  # 需要 sequence (4B) + payload_size (4B)
-            print(f"[ASR_PARSE] SERVER_FULL payload 太短: {len(payload)}", flush=True)
+            if verbose:
+                print(f"[ASR_PARSE] SERVER_FULL payload 太短: {len(payload)}", flush=True)
             return out
         seq = int.from_bytes(payload[:4], "big", signed=True)
         payload_size = int.from_bytes(payload[4:8], "big", signed=False)
-        print(f"[ASR_PARSE] SERVER_FULL seq={seq}, payload_size={payload_size}", flush=True)
+        if verbose:
+            print(f"[ASR_PARSE] SERVER_FULL seq={seq}, payload_size={payload_size}", flush=True)
         payload_msg = payload[8:]
     elif message_type == _ASR_WS_SERVER_ACK:
         if len(payload) >= 12:
@@ -184,22 +200,28 @@ def _asr_ws_parse_message(res: bytes) -> Dict[str, Any]:
             out["error_code"] = code
             payload_msg = payload[8 : 8 + payload_size]
     if payload_msg is None:
-        print(f"[ASR_PARSE] payload_msg 为 None", flush=True)
+        if verbose:
+            print(f"[ASR_PARSE] payload_msg 为 None", flush=True)
         return out
-    print(f"[ASR_PARSE] payload_msg len={len(payload_msg)}", flush=True)
+    if verbose:
+        print(f"[ASR_PARSE] payload_msg len={len(payload_msg)}", flush=True)
     if message_compression == _ASR_WS_GZIP:
         try:
             payload_msg = gzip.decompress(payload_msg)
-            print(f"[ASR_PARSE] 解压后长度={len(payload_msg)}", flush=True)
+            if verbose:
+                print(f"[ASR_PARSE] 解压后长度={len(payload_msg)}", flush=True)
         except Exception as e:
-            print(f"[ASR_PARSE] 解压失败: {e}", flush=True)
+            if verbose:
+                print(f"[ASR_PARSE] 解压失败: {e}", flush=True)
             return out
     if serialization_method == _ASR_WS_JSON:
         try:
             out["payload_msg"] = json.loads(str(payload_msg, "utf-8"))
-            print(f"[ASR_PARSE] JSON 解析成功，code={out['payload_msg'].get('code')}", flush=True)
+            if verbose:
+                print(f"[ASR_PARSE] JSON 解析成功，code={out['payload_msg'].get('code')}", flush=True)
         except Exception as e:
-            print(f"[ASR_PARSE] JSON 解析失败: {e}", flush=True)
+            if verbose:
+                print(f"[ASR_PARSE] JSON 解析失败: {e}", flush=True)
     return out
 
 
@@ -242,6 +264,7 @@ def _asr_ws_stream_run(
     chunk_ms: int,
     workflow: str,
     live_log: Callable[[str], None],
+    verbose: bool = False,
 ) -> str:
     try:
         import websocket  # type: ignore[import-untyped]
@@ -283,7 +306,8 @@ def _asr_ws_stream_run(
     seq += 1  # 发送完full request后递增
 
     # v3 API uses header-based authentication
-    print(f"[ASR] 连接到 {ws_url}", flush=True)
+    if verbose:
+        print(f"[ASR] 连接到 {ws_url}", flush=True)
     ws = websocket.create_connection(
         ws_url,
         header=[
@@ -294,24 +318,30 @@ def _asr_ws_stream_run(
         ],
         timeout=30,
     )
-    print(f"[ASR] WebSocket 连接成功", flush=True)
+    if verbose:
+        print(f"[ASR] WebSocket 连接成功", flush=True)
     latest = ""
     try:
-        print(f"[ASR] 发送 full client request，seq={seq-1}，payload_size={len(payload_b)}", flush=True)
+        if verbose:
+            print(f"[ASR] 发送 full client request，seq={seq-1}，payload_size={len(payload_b)}", flush=True)
         ws.send_binary(bytes(full_req))
         pm = None
         for i in range(4):
             try:
                 raw = ws.recv()
-                print(f"[ASR] 收到响应包 #{i}, 大小 {len(raw)} 字节", flush=True)
-                pr = _asr_ws_parse_message(raw)
-                print(f"[ASR] 解析响应: message_type={pr.get('message_type')}", flush=True)
+                if verbose:
+                    print(f"[ASR] 收到响应包 #{i}, 大小 {len(raw)} 字节", flush=True)
+                pr = _asr_ws_parse_message(raw, verbose=verbose)
+                if verbose:
+                    print(f"[ASR] 解析响应: message_type={pr.get('message_type')}", flush=True)
                 pm = pr.get("payload_msg")
                 if isinstance(pm, dict):
-                    print(f"[ASR] Full request 成功，code={pm.get('code')}", flush=True)
+                    if verbose:
+                        print(f"[ASR] Full request 成功，code={pm.get('code')}", flush=True)
                     break
             except Exception as e:
-                print(f"[ASR] 接收/解析响应 #{i} 出错: {e}", flush=True)
+                if verbose:
+                    print(f"[ASR] 接收/解析响应 #{i} 出错: {e}", flush=True)
                 raise
         # v3 API 初始化成功后直接返回识别结果，无 code 字段；检查 result 字段
         if not isinstance(pm, dict) or "result" not in pm:
@@ -362,16 +392,19 @@ def _asr_ws_stream_run(
             ws.send_binary(bytes(pkt))
             try:
                 raw2 = ws.recv()
-                print(f"[ASR] 收到音频响应，大小 {len(raw2)} 字节", flush=True)
-                pr2 = _asr_ws_parse_message(raw2)
+                if verbose:
+                    print(f"[ASR] 收到音频响应，大小 {len(raw2)} 字节", flush=True)
+                pr2 = _asr_ws_parse_message(raw2, verbose=verbose)
                 pm2 = pr2.get("payload_msg")
                 t = _asr_ws_text_from_payload(pm2)
                 if t:
-                    print(f"[ASR] 识别结果: {t}", flush=True)
+                    if verbose:
+                        print(f"[ASR] 识别结果: {t}", flush=True)
                     latest = t
                     live_log(t)
             except Exception as e:
-                print(f"[ASR] 接收音频响应出错: {e}", flush=True)
+                if verbose:
+                    print(f"[ASR] 接收音频响应出错: {e}", flush=True)
                 raise
 
         zip_last = gzip.compress(bytes(buf)) if buf else gzip.compress(b"")
@@ -381,9 +414,11 @@ def _asr_ws_stream_run(
         pkt_l.extend((-seq).to_bytes(4, "big", signed=True))  # 序列号（负数表示最后一包）
         pkt_l.extend(len(zip_last).to_bytes(4, "big"))
         pkt_l.extend(zip_last)
-        print(f"[ASR] 发送最后一包，seq={-seq}, 大小={len(zip_last)}B", flush=True)
+        if verbose:
+            print(f"[ASR] 发送最后一包，seq={-seq}, 大小={len(zip_last)}B", flush=True)
         ws.send_binary(bytes(pkt_l))
-        print(f"[ASR] 等待最终响应...", flush=True)
+        if verbose:
+            print(f"[ASR] 等待最终响应...", flush=True)
         try:
             ws.settimeout(3.0)
         except Exception:
@@ -391,24 +426,30 @@ def _asr_ws_stream_run(
         for i in range(5):
             try:
                 raw_l = ws.recv()
-                print(f"[ASR] 收到最终响应 #{i}, 大小 {len(raw_l)} 字节", flush=True)
-                pr_l = _asr_ws_parse_message(raw_l)
+                if verbose:
+                    print(f"[ASR] 收到最终响应 #{i}, 大小 {len(raw_l)} 字节", flush=True)
+                pr_l = _asr_ws_parse_message(raw_l, verbose=verbose)
                 pm_l = pr_l.get("payload_msg")
                 t2 = _asr_ws_text_from_payload(pm_l)
                 if t2:
-                    print(f"[ASR] 最终识别结果: {t2}", flush=True)
+                    if verbose:
+                        print(f"[ASR] 最终识别结果: {t2}", flush=True)
                     latest = t2
             except Exception as e:
-                print(f"[ASR] 接收最终响应出错: {e}", flush=True)
+                if verbose:
+                    print(f"[ASR] 接收最终响应出错: {e}", flush=True)
                 break
     finally:
         try:
-            print(f"[ASR] 关闭 WebSocket 连接，最终识别结果: {latest}", flush=True)
+            if verbose:
+                print(f"[ASR] 关闭 WebSocket 连接，最终识别结果: {latest}", flush=True)
             ws.close()
         except Exception:
             pass
     return latest
 
+
+_llm_session = None
 
 def _google_gemini_chat_stream(
     *,
@@ -424,6 +465,10 @@ def _google_gemini_chat_stream(
     except ImportError as e:
         raise SystemExit("未安装 requests。请执行： pip install requests") from e
 
+    global _llm_session
+    if _llm_session is None:
+        _llm_session = requests.Session()
+
     key = _google_gemini_key()
     if not key:
         raise RuntimeError("缺少 GEMINI_API_KEY / GOOGLE_API_KEY")
@@ -434,7 +479,7 @@ def _google_gemini_chat_stream(
         "contents": contents,
         "generationConfig": {"temperature": temperature},
     }
-    r = requests.post(
+    r = _llm_session.post(
         url,
         params={"key": key, "alt": "sse"},
         json=body,
@@ -527,6 +572,7 @@ def run_coach_v2_after_summary(
     coach_bundle: Optional[Dict[str, Any]] = None,
     skip_bundle_preview_print: bool = False,
     on_answer: Optional[Callable[[str, int], None]] = None,
+    max_history_turns: int = 3,
 ) -> None:
     """同 gemini_v1.run_coach_after_summary，但 LLM 固定走流式接口。"""
     if coach_bundle is None:
@@ -550,9 +596,20 @@ def run_coach_v2_after_summary(
             ),
         }
     ]
+    max_history_turns = max(1, int(max_history_turns or 3))
     ll_total = 0.0
     turn = 0
     answer = ""
+
+    def _trim_chat_hist() -> None:
+        """保留首轮 user 消息 + 最近 max_history_turns 轮追问。"""
+        if len(chat_hist) <= 1 + max_history_turns * 2:
+            return
+        first = chat_hist[0]
+        trimmed = chat_hist[-max_history_turns * 2:]
+        chat_hist.clear()
+        chat_hist.append(first)
+        chat_hist.extend(trimmed)
 
     def _default_follow_up() -> str:
         io_lock.acquire()
@@ -641,6 +698,7 @@ def run_coach_v2_after_summary(
         chat_hist.append(
             {"role": "user", "content": _coach_followup_user_message(nxt)}
         )
+        _trim_chat_hist()
 
     print(f"[{log_prefix}] 本回合步骤耗时")
     if args.no_rag:
@@ -697,9 +755,10 @@ class VoiceSession:
         doubao_asr_resource_id: str = "volc.bigasr.sauc.duration",
         asr_timeout_sec: float = 120.0,
         doubao_asr_ws_cluster: str = "volcengine_streaming_common",
-        asr_chunk_ms: int = 100,
+        asr_chunk_ms: int = 200,
         asr_stream: bool = True,
         asr_workflow: str = "audio_in,resample,partition,vad,fe,decode,itn,nlu_punctuate",
+        asr_verbose: bool = False,
     ) -> None:
         self.simplify_zh = bool(simplify_zh)
         self.asr_glossary = dict(asr_glossary or {})
@@ -708,9 +767,10 @@ class VoiceSession:
         self.doubao_asr_resource_id = str(doubao_asr_resource_id or "").strip()
         self.asr_timeout_sec = max(10.0, float(asr_timeout_sec or 120.0))
         self.doubao_asr_ws_cluster = str(doubao_asr_ws_cluster or "").strip()
-        self.asr_chunk_ms = max(40, min(500, int(asr_chunk_ms or 100)))
+        self.asr_chunk_ms = max(40, min(500, int(asr_chunk_ms or 200)))
         self.asr_stream = bool(asr_stream)
         self.asr_workflow = str(asr_workflow or "").strip()
+        self.asr_verbose = bool(asr_verbose)
         self._lock = threading.Lock()
         self._stdout_lock = threading.Lock()
         self.segments: List[str] = []
@@ -951,6 +1011,35 @@ def _doubao_tts_speech_rate_from_speed(speed: float) -> int:
     return max(-50, min(100, int(round(v))))
 
 
+def _infer_doubao_resource_id_from_speaker(speaker: str) -> Optional[str]:
+    s = (speaker or "").strip().lower()
+    if not s:
+        return None
+    # 声音复刻音色（S_xxx / ICL_xxx）走 seed-icl 通道，默认优先 2.0 字符版。
+    if s.startswith("s_") or s.startswith("icl_"):
+        return "seed-icl-2.0"
+    # 官方内置音色：saturn_* / *_jupiter_bigtts 归到 TTS 2.0。
+    if s.startswith("saturn_") or "_jupiter_bigtts" in s:
+        return "seed-tts-2.0"
+    # 其余常见内置 bigtts 音色默认按 TTS 1.0。
+    return "seed-tts-1.0"
+
+
+def _tts_model_label_from_resource_id(resource_id: str) -> str:
+    rid = (resource_id or "").strip().lower()
+    mapping = {
+        "seed-tts-1.0": "豆包语音合成模型 1.0（字符版）",
+        "volc.service_type.10029": "豆包语音合成模型 1.0（字符版）",
+        "seed-tts-1.0-concurr": "豆包语音合成模型 1.0（并发版）",
+        "volc.service_type.10048": "豆包语音合成模型 1.0（并发版）",
+        "seed-tts-2.0": "豆包语音合成模型 2.0（字符版）",
+        "seed-icl-1.0": "声音复刻模型 1.0（字符版）",
+        "seed-icl-1.0-concurr": "声音复刻模型 1.0（并发版）",
+        "seed-icl-2.0": "声音复刻模型 2.0（字符版）",
+    }
+    return mapping.get(rid, f"未知资源模型（{resource_id}）")
+
+
 class TTSPlayer:
     """将 LLM 文本调用豆包 TTS 合成，并可选本地播放。"""
 
@@ -986,6 +1075,12 @@ class TTSPlayer:
             getattr(args, "doubao_tts_audio_format", "pcm") or "pcm"
         ).strip().lower()
         self.doubao_sample_rate = int(getattr(args, "doubao_tts_sample_rate", 24000) or 24000)
+        
+        try:
+            import requests
+            self.session = requests.Session()
+        except ImportError:
+            self.session = None
 
     def _write_audio_bytes(self, raw: bytes, turn: int, ext_hint: str = ".wav") -> Path:
         ext = ext_hint if ext_hint.startswith(".") else f".{ext_hint}"
@@ -1049,6 +1144,22 @@ class TTSPlayer:
             )
             return None
 
+        inferred_resource = _infer_doubao_resource_id_from_speaker(speaker)
+        if inferred_resource and resource_id != inferred_resource:
+            print(
+                f"[gemini_v2][TTS] 检测到 speaker={speaker} 更匹配 {inferred_resource}，"
+                f"当前 resource_id={resource_id}，已自动改用 {inferred_resource}"
+                f"（{_tts_model_label_from_resource_id(inferred_resource)}）。",
+                flush=True,
+            )
+            resource_id = inferred_resource
+        else:
+            print(
+                f"[gemini_v2][TTS] 当前配置：speaker={speaker}  resource_id={resource_id}"
+                f"（{_tts_model_label_from_resource_id(resource_id)}）",
+                flush=True,
+            )
+
         url = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
         headers = {
             "X-Api-App-Id": app_id,
@@ -1075,9 +1186,14 @@ class TTSPlayer:
             req["emotion"] = self.doubao_emotion
             if self.doubao_emotion_scale is not None:
                 req["emotion_scale"] = int(self.doubao_emotion_scale)
+
         payload: Dict[str, Any] = {"user": {"uid": uid}, "req_params": req}
+        if self.session is not None:
+            return self.session.post(
+                url, headers=headers, json=payload, stream=True, timeout=self.timeout_sec, verify=True
+            )
         return requests.post(
-            url, headers=headers, json=payload, stream=True, timeout=self.timeout_sec
+            url, headers=headers, json=payload, stream=True, timeout=self.timeout_sec, verify=True
         )
 
     def _consume_doubao_tts_stream(
@@ -1125,8 +1241,11 @@ class TTSPlayer:
                 hint = ""
                 if code == 55000000 and "resource" in msg.lower() and "speaker" in msg.lower():
                     hint = "\n  【诊断】Resource ID 与 Speaker 不匹配。检查：\n" \
-                           "   • 若 speaker 是模型1.0音色（如 zh_female_*_moon_bigtts），需 resource_id=seed-tts-1.0\n" \
-                           "   • 若 speaker 是模型2.0音色（如 saturn_* 开头），需 resource_id=seed-tts-2.0\n" \
+                           "   • 豆包语音合成模型1.0：seed-tts-1.0 / volc.service_type.10029（字符版）\n" \
+                           "   • 豆包语音合成模型1.0并发：seed-tts-1.0-concurr / volc.service_type.10048\n" \
+                           "   • 豆包语音合成模型2.0：seed-tts-2.0（字符版）\n" \
+                           "   • 声音复刻1.0：seed-icl-1.0（字符版）/ seed-icl-1.0-concurr（并发版）\n" \
+                           "   • 声音复刻2.0：seed-icl-2.0（字符版）\n" \
                            "   • 使用 --doubao-tts-resource-id 或环境变量 DOUBAO_TTS_RESOURCE_ID 修改"
                 raise RuntimeError(f"豆包 TTS 返回异常 code={code} message={msg}{hint}")
         return got
@@ -1304,13 +1423,18 @@ def _build_argparser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--asr-chunk-ms",
         type=int,
-        default=100,
-        help="流式 ASR 每包时长约多少毫秒音频（40～500，默认 100）",
+        default=200,
+        help="流式 ASR 每包时长约多少毫秒音频（40～500，默认 200）",
     )
     ap.add_argument(
         "--asr-no-stream",
         action="store_true",
         help="关闭边录边识别，仅回车后用 HTTP flash 整段识别",
+    )
+    ap.add_argument(
+        "--asr-verbose",
+        action="store_true",
+        help="开启 ASR 调试日志（默认关闭，开启后会打印每个音频包的收发细节）",
     )
     ap.add_argument(
         "--asr-workflow",
@@ -1321,6 +1445,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--no-zh-simplify",
         action="store_true",
         help="不对 ASR 结果做繁转简（默认安装 zhconv 时转为大陆简体）",
+    )
+    ap.add_argument(
+        "--max-history-turns",
+        type=int,
+        default=3,
+        help="追问时保留最近多少轮对话历史（默认 3，防止越问越慢）",
     )
     ap.add_argument(
         "--asr-glossary",
@@ -1360,12 +1490,12 @@ def _build_argparser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--tts-speed",
         type=float,
-        default=1.25,
-        help="豆包TTS语速倍率（默认 1.25；按官方映射写入 speech_rate）",
+        default=1.8,
+        help="豆包TTS语速倍率（默认 1.8；按官方映射写入 speech_rate）",
     )
     ap.add_argument(
         "--doubao-tts-emotion",
-        default="",
+        default="angry",
         help="TTS 情感（如 happy、angry；不填则不带该字段，按音色能力为准）",
     )
     ap.add_argument(
@@ -1448,9 +1578,10 @@ def main() -> None:
             doubao_asr_resource_id=str(args.doubao_asr_resource_id or ""),
             asr_timeout_sec=float(args.asr_timeout or 120.0),
             doubao_asr_ws_cluster=ws_cl,
-            asr_chunk_ms=int(args.asr_chunk_ms or 100),
+            asr_chunk_ms=int(args.asr_chunk_ms or 200),
             asr_stream=not bool(args.asr_no_stream),
             asr_workflow=str(args.asr_workflow or ""),
+            asr_verbose=bool(args.asr_verbose),
         )
         voice.warmup()
 
@@ -1611,6 +1742,7 @@ def main() -> None:
         coach_bundle=bundle_for_coach,
         skip_bundle_preview_print=bundle_for_coach is not None,
         on_answer=tts.speak,
+        max_history_turns=getattr(args, "max_history_turns", 3),
     )
 
 

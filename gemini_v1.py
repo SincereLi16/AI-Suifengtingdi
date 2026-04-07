@@ -145,6 +145,8 @@ def _openrouter_env() -> tuple[str, str, str]:
     return base, key, text
 
 
+_llm_session = None
+
 def _openrouter_chat_completion(
     *,
     messages: List[Dict[str, str]],
@@ -162,6 +164,11 @@ def _openrouter_chat_completion(
         key.encode("ascii")
     except UnicodeEncodeError as e:
         raise RuntimeError("OPENROUTER_API_KEY 须为纯 ASCII，请从 OpenRouter 控制台重新复制") from e
+
+    global _llm_session
+    if _llm_session is None:
+        import requests
+        _llm_session = requests.Session()
 
     url = f"{base}/chat/completions"
     # OpenRouter 官方建议附带 Referer / Title，部分环境缺省时仍可避免异常路由
@@ -183,7 +190,7 @@ def _openrouter_chat_completion(
     if stream_output:
         payload["stream"] = True
 
-    r = requests.post(
+    r = _llm_session.post(
         url,
         headers=headers,
         json=payload,
@@ -365,7 +372,13 @@ def _google_gemini_chat(
         "contents": contents,
         "generationConfig": {"temperature": temperature},
     }
-    r = requests.post(url, params={"key": key}, json=body, timeout=timeout_s)
+
+    global _llm_session
+    if _llm_session is None:
+        import requests
+        _llm_session = requests.Session()
+
+    r = _llm_session.post(url, params={"key": key}, json=body, timeout=timeout_s)
     data = r.json()
     if not r.ok:
         err = data.get("error") or {}
