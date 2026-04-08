@@ -315,10 +315,17 @@ def pick_next_finished_recommendations(
     worn = set(eq_names)
     pool = [str(x).strip() for x in meta_rec if str(x).strip()]
     
-    # 修复：当 meta_rec 为空时，使用 equip_map 中的所有装备作为候选池
-    # 这样推荐逻辑才能基于当前已有装备的属性，从全局装备库中筛选出符合需求的装备
+    # 修复：当 meta_rec 为空时，使用 equip_map 中的所有成装作为候选池
+    # 过滤掉包含“散件”或“基础装备”等描述的装备，确保只推荐成装
     if not pool and equip_map:
-        pool = [str(name).strip() for name in equip_map.keys() if str(name).strip()]
+        pool = []
+        for name, row in equip_map.items():
+            if str(name).strip():
+                # 过滤掉散件（通常没有成装属性或被标记为基础装备）
+                # 假设基础装备没有合成配方或属于基础装备类型，可以在此处增加简单的过滤
+                equip_type = str(row.get("equip_type") or "")
+                if "基础装备" not in equip_type:
+                    pool.append(str(name).strip())
 
     ap_f, ad_f, hybrid_f = main_c_ap_ad_flags(role_tags)
     ap_carry = ap_f or hybrid_f

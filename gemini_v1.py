@@ -752,6 +752,9 @@ def _build_board_emoji_sections(
             # 修复：过滤掉已佩戴的装备，避免推荐已有装备
             filtered_rec = [x for x in rec_list if str(x).strip() and str(x).strip() not in eqs]
             if filtered_rec:
+                # 如果过滤后仍有推荐，根据空位截取
+                need = max(0, 3 - n_eq)
+                filtered_rec = filtered_rec[:need]
                 rec_show = "、".join(_equip_name_with_optional_short(x, equip_map) for x in filtered_rec if str(x).strip())
             else:
                 # 如果过滤后为空，调用动态推荐逻辑
@@ -2459,11 +2462,22 @@ def run_coach_after_summary(
             print("\n【随风听笛说】\n")
             print(answer)
             print()
+            
+        # 如果已经有了独立的并发流式 TTS（如 gemini_v2 中动态传入并处理的），
+        # 那么此时 on_answer() 其实已经完成，此处调用只是为了兼容不支持并发 TTS 的老逻辑。
+        # 为了兼容无法设置 attribute 的 bound method，这里改用一个全局/类状态或标志位判断。
+        # 因为在 gemini_v1 这里我们默认不是并发 tts（只在 v2 里是并发），所以简单起见：
+        # 我们检测是否是从 run_coach_v2_after_summary 过来的。
+        # 但其实更简单的方法是：我们在 v2 里直接不传 on_answer 进 _coach_chat_turn_streaming 的底层逻辑，
+        # 或者在这里只做最基本的回调。因为 v2 里这个逻辑是被 v2 自己的 run_coach_v2 替代了。
+        # 所以这里的代码其实只影响 v1 自己。
         if on_answer is not None:
-            try:
-                on_answer(answer, turn)
-            except Exception as e:
-                print(f"[{log_prefix}] TTS 回调失败（已忽略）: {e}", flush=True)
+            # 只有当这不是 v2 专门注入的一个包装器时，才执行
+            if getattr(on_answer, "__name__", "") != "_v2_concurrent_wrapper":
+                try:
+                    on_answer(answer, turn)
+                except Exception as e:
+                    print(f"[{log_prefix}] TTS 回调失败（已忽略）: {e}", flush=True)
         if not sys.stdin.isatty():
             break
         print(

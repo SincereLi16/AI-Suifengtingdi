@@ -25,6 +25,10 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+from openai import OpenAI
+import dashscope
+
+dashscope.api_key = os.getenv('DASHSCOPE_API_KEY', 'sk-ea63a17f3b2a4ba8815ff29e5e89d487')
 
 REPO_ROOT = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in sys.path:
@@ -37,12 +41,9 @@ DEFAULT_SUMMARY_DIR = REPO_ROOT / "runs" / "battle_pipeline_v3_out"
 
 # (展示名, model id, provider)
 DEFAULT_MODEL_ROWS: List[Tuple[str, str, str]] = [
-    ("Gemini 2.5 Flash", "google/gemini-2.5-flash", "openrouter"),
-    ("Gemini 2.5 Flash Lite", "google/gemini-2.5-flash-lite", "openrouter"),
-    ("Gemini 2.5 Flash (Google直连)", "gemini-2.5-flash", "google"),
-    ("Gemini 2.0 Flash (Google直连)", "gemini-2.0-flash", "google"),
     ("Doubao Seed 2.0 Mini", "doubao-seed-2-0-mini-260215", "ark"),
-    ("Doubao Seed 1.6 Flash", "doubao-seed-1-6-flash-250828", "ark"),
+    ("Qwen 3.5 Flash", "qwen-plus", "dashscope"),
+    ("DeepSeek V3", "deepseek-chat", "deepseek"),
 ]
 
 DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
@@ -77,6 +78,10 @@ def _estimate_network_jitter_s(base: str, key: str, tries: int = 3) -> float:
     }
     samples: List[float] = []
     url = base.rstrip("/") + "/models"
+    if "deepseek" in base:
+        url = base.rstrip("/") + "/chat/completions"
+    elif "dashscope" in base:
+        url = base.rstrip("/") + "/api/v1/services/aigc/text2image/generation" # A common endpoint for dashscope, just for RTT estimation
     for _ in range(max(1, tries)):
         t0 = time.perf_counter()
         try:
@@ -246,6 +251,51 @@ def _call_google_stream(
     }
 
 
+def _call_qwen_stream(
+    model_id: str,
+    user_text: str,
+    *,
+    temperature: float,
+    timeout_s: float,
+    max_tokens: int,
+) -> Dict[str, Any]:
+    first_chunk_ts: List[Optional[float]] = [None]
+
+    sys_prompt = gv._coach_system_prompt()
+    messages = [
+        {'role': 'system', 'content': sys_prompt},
+        {'role': 'user', 'content': user_text}
+    ]
+
+    t0 = time.perf_counter()
+    response = dashscope.Generation.call(
+        model=model_id,
+        api_key=os.getenv('DASHSCOPE_API_KEY'),
+        messages=messages,
+        result_format='message',
+        stream=False,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        # TODO: dashscope does not support timeout parameter directly in Generation.call
+        # timeout=timeout_s,
+    )
+
+    t1 = time.perf_counter()
+    if response.status_code == 200:
+        answer = response.output.choices[0].message.content
+    else:
+        raise RuntimeError(f"Qwen API error: {response.message}")
+
+    ttft = (t1 - t0) # 非流式，TTFT 近似总耗时
+    gen_sec = 0.0
+    return {
+        "answer": answer,
+        "total_sec": (t1 - t0),
+        "ttft_sec": ttft,
+        "gen_sec": gen_sec,
+    }
+
+
 def _call_openrouter_stream(
     model_id: str,
     user_text: str,
@@ -347,6 +397,57 @@ def _call_ark_responses(
     }
 
 
+def _call_deepseek_stream(
+    model_id: str,
+    user_text: str,
+    *,
+    temperature: float,
+    timeout_s: float,
+    max_tokens: int,
+) -> Dict[str, Any]:
+    first_chunk_ts: List[Optional[float]] = [None]
+
+    client = OpenAI(
+        api_key=os.environ.get('DEEPSEEK_API_KEY', 'sk-34f52c4ef182472b8e418653c8748abc'),
+        base_url="https://api.deepseek.com"
+    )
+
+    sys_prompt = gv._coach_system_prompt()
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": user_text},
+    ]
+
+    t0 = time.perf_counter()
+    response = client.chat.completions.create(
+        model=model_id,
+        messages=messages,
+        stream=True,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout_s,
+    )
+
+    acc: List[str] = []
+    for chunk in response:
+        if first_chunk_ts[0] is None:
+            first_chunk_ts[0] = time.perf_counter()
+        content = chunk.choices[0].delta.content
+        if content:
+            acc.append(content)
+
+    t1 = time.perf_counter()
+    answer = "".join(acc).strip()
+    ttft = (first_chunk_ts[0] - t0) if first_chunk_ts[0] is not None else (t1 - t0)
+    gen_sec = (t1 - first_chunk_ts[0]) if first_chunk_ts[0] is not None else 0.0
+    return {
+        "answer": answer,
+        "total_sec": (t1 - t0),
+        "ttft_sec": ttft,
+        "gen_sec": gen_sec,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="OpenRouter/ARK 多模型教练对比（与 gemini_v1 同 prompt/RAG）")
     ap.add_argument(
@@ -392,7 +493,7 @@ def main() -> None:
         help="ARK thinking 开关：disabled 仅输出最终答案；enabled 允许思考内容",
     )
     ap.add_argument("--temperature", type=float, default=0.35)
-    ap.add_argument("--max-tokens", type=int, default=100, help="限制输出 token 上限（默认100）")
+    ap.add_argument("--max-tokens", type=int, default=2048, help="限制输出 token 上限（默认2048）")
     ap.add_argument("--timeout", type=float, default=120.0)
     ap.add_argument("--json-out", type=Path, default=None, help="将原始结果写入 JSON（utf-8）")
     args = ap.parse_args()
@@ -449,10 +550,14 @@ def main() -> None:
     base, key, _ = gv._openrouter_env()
     net_jitter_openrouter = _estimate_network_jitter_s(base, key, tries=3)
     net_jitter_ark = _estimate_network_jitter_s(args.ark_base_url, args.ark_api_key, tries=3) if args.ark_api_key else 0.0
+    net_jitter_deepseek = _estimate_network_jitter_s("https://api.deepseek.com", os.getenv('DEEPSEEK_API_KEY') or "", tries=3) if os.getenv('DEEPSEEK_API_KEY') else 0.0
+    net_jitter_dashscope = _estimate_network_jitter_s("https://dashscope.aliyuncs.com", os.getenv('DASHSCOPE_API_KEY') or "", tries=3) if os.getenv('DASHSCOPE_API_KEY') else 0.0
 
     print(f"流式: 开启 | max_tokens={max_tokens}")
     print(f"网络抖动估计(OpenRouter 中位RTT): {net_jitter_openrouter:.3f}s")
     print(f"网络抖动估计(ARK 中位RTT): {net_jitter_ark:.3f}s")
+    print(f"网络抖动估计(DeepSeek 中位RTT): {net_jitter_deepseek:.3f}s")
+    print(f"网络抖动估计(DashScope 中位RTT): {net_jitter_dashscope:.3f}s")
 
     for label, model_id, provider in model_rows:
         print(f"\n{'#' * 72}\n# 模型: {label}\n# id: {model_id}\n# provider: {provider}\n{'#' * 72}")
@@ -467,11 +572,15 @@ def main() -> None:
             prefirst_wait_sec = 0.0
             queue_prefill_est_sec = 0.0
             net_jitter_est = net_jitter_ark if provider == "ark" else (
-                _estimate_network_jitter_s(
-                    "https://generativelanguage.googleapis.com/v1beta/models/",
-                    os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or "",
-                    tries=3,
-                ) if provider == "google" else net_jitter_openrouter
+                net_jitter_deepseek if provider == "deepseek" else (
+                    net_jitter_dashscope if provider == "dashscope" else (
+                        _estimate_network_jitter_s(
+                            "https://generativelanguage.googleapis.com/v1beta/models/",
+                            os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or "",
+                            tries=3,
+                        ) if provider == "google" else net_jitter_openrouter
+                    )
+                )
             )
             try:
                 if provider == "ark":
@@ -484,6 +593,22 @@ def main() -> None:
                         ark_base=args.ark_base_url,
                         ark_api_key=args.ark_api_key,
                         ark_thinking_type=args.ark_thinking_type,
+                    )
+                elif provider == "deepseek":
+                    ret = _call_deepseek_stream(
+                        model_id,
+                        user_text,
+                        temperature=coach_temp,
+                        timeout_s=timeout_s,
+                        max_tokens=max_tokens,
+                    )
+                elif provider == "dashscope":
+                    ret = _call_qwen_stream(
+                        model_id,
+                        user_text,
+                        temperature=coach_temp,
+                        timeout_s=timeout_s,
+                        max_tokens=max_tokens,
                     )
                 elif provider == "google":
                     ret = _call_google_stream(

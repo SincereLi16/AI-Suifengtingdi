@@ -1528,7 +1528,20 @@ class E2EDialogueSession:
         def _tts_player() -> None:
             try:
                 import sounddevice as sd
+                import numpy as np
                 with sd.RawOutputStream(samplerate=E2E_TTS_OUTPUT_SAMPLE_RATE, channels=1, dtype="int16") as out:
+                    # 播放 0.3 秒的 440Hz 柔和提示音 + 0.7 秒静音，作为蓝牙设备的绝对预热唤醒
+                    sr = E2E_TTS_OUTPUT_SAMPLE_RATE
+                    t = np.linspace(0, 0.3, int(sr * 0.3), False)
+                    beep = np.sin(440 * 2 * np.pi * t) * 4000
+                    beep_bytes = beep.astype(np.int16).tobytes()
+                    silence_bytes = b'\x00' * int(sr * 0.7 * 2)
+                    try:
+                        out.write(beep_bytes)
+                        out.write(silence_bytes)
+                    except Exception:
+                        pass
+                    
                     while True:
                         chunk = tts_queue.get()
                         if chunk is None:

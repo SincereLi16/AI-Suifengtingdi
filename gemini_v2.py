@@ -1,8 +1,3 @@
- 
-   
-   
-   
-    
     # -*- coding: utf-8 -*-
 """
 gemini_v1 同款流水线与教练对话，交互问题改为：**按一次空格** 开始录音（仅提示录音中，不显示实时文字）→ **回车** 结束录音，
@@ -631,17 +626,75 @@ def run_coach_v2_after_summary(
         flush_ts: List[float] = [t_ll0]
         stream_buf: List[str] = []
 
+         # 仅切分一次：第一段缓冲足够长后切出，剩余内容等回答结束一次性发出
+        sentence_buf: List[str] = []
+        tts_tasks: queue.Queue[Optional[str]] = queue.Queue()
+        tts_done_ev = threading.Event()
+        
+        # 标点符号用于切分第一句话
+        PUNCTS = set("。！？；.!?;\n")
+        first_sentence_sent = [False]
+        
+        def _tts_worker():
+            try:
+                sub_turn = 1
+                while True:
+                    text_chunk = tts_tasks.get()
+                    if text_chunk is None:
+                        break
+                    text_chunk = text_chunk.strip()
+                    if text_chunk:
+                        # 对于切分的片段，丢给 TTSPlayer
+                        if on_answer is not None:
+                            try:
+                                # 只在第一段短句时播放唤醒“滴”声
+                                is_first = (sub_turn == 1)
+                                
+                                # 为了兼容原版只接收两个参数的回调签名，这里做个检测或分发
+                                import inspect
+                                sig = inspect.signature(on_answer)
+                                if "is_first_chunk" in sig.parameters:
+                                    on_answer(text_chunk, turn, is_first_chunk=is_first)
+                                else:
+                                    # 如果外部传入的是旧版本方法，我们只能强行调用或放弃滴声控制
+                                    on_answer(text_chunk, turn)
+                                    
+                            except Exception as e:
+                                print(f"[{log_prefix}] 并发 TTS 播放异常: {e}", flush=True)
+                    sub_turn += 1
+            finally:
+                tts_done_ev.set()
+
+        tts_thread = threading.Thread(target=_tts_worker, daemon=True)
+        tts_thread.start()
+
         def _on_chunk(chunk: str) -> None:
             now = time.perf_counter()
             if first_chunk_ts[0] is None:
                 first_chunk_ts[0] = now
             stream_buf.append(chunk)
+            
+            # 为了防止句子过短导致 TTS API 走默认音色或分配错误韵律，强制第一段必须积累足够的上下文。
+            # 这里放弃“每个标点都切分”的策略，而是恢复到“只切一次（首段），剩下的作为第二段”。
+            # 并且首段的长度必须大于等于 15 个字。
+            for char in chunk:
+                sentence_buf.append(char)
+                if not first_sentence_sent[0]:
+                    if char in PUNCTS:
+                        s = "".join(sentence_buf).strip()
+                        # 声音复刻模型 (ICL) 需要足够长的上下文（建议 15-20 字以上）才能稳定还原音色和语速
+                        if s and len(s) >= 15:
+                            tts_tasks.put(s)
+                            sentence_buf.clear()
+                            first_sentence_sent[0] = True
+
             if print_to_tty and (now - flush_ts[0] >= 0.2):
                 out = "".join(stream_buf)
                 stream_buf.clear()
                 print(out, end="", flush=True)
                 flush_ts[0] = now
 
+        # 不再尝试给绑定的方法 (bound method) 赋值属性
         answer_raw = _coach_chat_turn_streaming(
             chat_hist,
             temperature=0.35,
@@ -649,11 +702,29 @@ def run_coach_v2_after_summary(
         )
         answer = str(answer_raw or "").strip()
         t_ll1 = time.perf_counter()
-
+        
+        # 把剩余还没发送的文本发给 TTS，并等待所有 TTS 任务播放完
+        s = "".join(sentence_buf).strip()
+        if s:
+            tts_tasks.put(s)
+        tts_tasks.put(None)
+        
         if print_to_tty and stream_buf:
             print("".join(stream_buf), end="", flush=True)
             stream_buf.clear()
             print(flush=True)
+            
+        # 必须等待声音彻底播完，才能进入下一轮
+        tts_thread.join()
+        
+        # 当所有文本切分短句都丢给底层的共享队列后，发送毒药丸让共享音频线程结束
+        if on_answer is not None and getattr(on_answer, "__self__", None) is not None:
+            tts_player_instance = getattr(on_answer, "__self__")
+            if hasattr(tts_player_instance, "_shared_audio_queue"):
+                # 注意：如果外部使用其他播放器，这里就不执行。确保我们修改的是内部 TTSPlayer
+                tts_player_instance._shared_audio_queue.put(None)
+                if tts_player_instance._shared_player_thread is not None:
+                    tts_player_instance._shared_player_thread.join()
 
         total_sec = t_ll1 - t_ll0
         if first_chunk_ts[0] is not None:
@@ -676,11 +747,7 @@ def run_coach_v2_after_summary(
             print("\n【随风听笛说】\n", flush=True)
             print(answer, flush=True)
             print(flush=True)
-        if on_answer is not None:
-            try:
-                on_answer(answer, turn)
-            except Exception as e:
-                print(f"[{log_prefix}] TTS 回调失败（已忽略）: {e}", flush=True)
+            
         if not sys.stdin.isatty():
             break
         print(
@@ -1050,7 +1117,7 @@ class TTSPlayer:
         self.save = bool(getattr(args, "tts_save", False))
         self.out_dir = Path(getattr(args, "tts_out_dir", DEFAULT_TTS_OUT_DIR)).resolve()
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        self.speed = float(getattr(args, "tts_speed", 1.25) or 1.25)
+        self.speed = float(getattr(args, "tts_speed", 2.8) or 2.8)
         emo = str(getattr(args, "doubao_tts_emotion", "") or "").strip()
         if not emo:
             emo = os.getenv("DOUBAO_TTS_EMOTION", "").strip()
@@ -1068,13 +1135,18 @@ class TTSPlayer:
         self.doubao_access_key = str(getattr(args, "doubao_tts_access_key", "") or "").strip()
         self.doubao_resource_id = str(
             getattr(args, "doubao_tts_resource_id", "") or ""
-        ).strip()
+        ).strip() or "seed-icl-2.0"
         self.doubao_speaker = str(getattr(args, "doubao_tts_speaker", "") or "").strip()
         self.doubao_uid = str(getattr(args, "doubao_tts_uid", "gemini_v2") or "gemini_v2").strip()
         self.doubao_audio_format = str(
             getattr(args, "doubao_tts_audio_format", "pcm") or "pcm"
         ).strip().lower()
         self.doubao_sample_rate = int(getattr(args, "doubao_tts_sample_rate", 24000) or 24000)
+        
+        # 共享流式音频队列与状态，用于无缝拼接多个短句
+        self._shared_audio_queue: Optional[queue.Queue] = None
+        self._shared_player_thread: Optional[threading.Thread] = None
+        self._shared_player_lock = threading.Lock()
         
         try:
             import requests
@@ -1127,6 +1199,9 @@ class TTSPlayer:
         return buf.getvalue()
 
     def _doubao_tts_request(self, text: str, audio_format: str):
+        # 修正连字符发音，将数字之间的 "-" 替换为 "杠" (例如 "5-5" 变为 "5杠5")
+        text = re.sub(r'(?<=\d)-(?=\d)', '杠', text)
+        
         try:
             import requests
         except ImportError as e:
@@ -1250,6 +1325,86 @@ class TTSPlayer:
                 raise RuntimeError(f"豆包 TTS 返回异常 code={code} message={msg}{hint}")
         return got
 
+    def _call_doubao_tts_stream(self, text: str, play_beep: bool = True) -> Optional[Dict[str, Any]]:
+        """流式播放 TTS：收到一包 PCM 就播放一包，不等待整句合成完毕。
+        play_beep: 是否在流的开头播放唤醒提示音。
+        """
+        audio_format = (
+            self.doubao_audio_format
+            if self.doubao_audio_format in {"pcm", "mp3", "ogg_opus"}
+            else "pcm"
+        )
+        
+        # 仅 pcm 支持流式直接播放
+        if audio_format != "pcm" or not self.play:
+            return self._call_doubao_tts_buffered(text)
+
+        resp = self._doubao_tts_request(text, audio_format)
+        if resp is None:
+            return None
+        if resp.status_code >= 400:
+            raise RuntimeError(f"豆包 TTS HTTP {resp.status_code}: {(resp.text or '')[:300]}")
+            
+        import sounddevice as sd
+        import numpy as np
+        
+        # 懒加载初始化全局共享的音频输出流和队列
+        with self._shared_player_lock:
+            if self._shared_player_thread is None or not self._shared_player_thread.is_alive():
+                self._shared_audio_queue = queue.Queue()
+                
+                def _shared_play_worker():
+                    try:
+                        with sd.RawOutputStream(
+                            samplerate=self.doubao_sample_rate, 
+                            channels=1, 
+                            dtype="int16"
+                        ) as out:
+                            while True:
+                                item = self._shared_audio_queue.get()
+                                if item is None:
+                                    break
+                                
+                                # 处理命令：比如播报 beep 唤醒
+                                if isinstance(item, str) and item == "BEEP":
+                                    sr = self.doubao_sample_rate
+                                    t = np.linspace(0, 0.3, int(sr * 0.3), False)
+                                    beep = np.sin(440 * 2 * np.pi * t) * 4000
+                                    beep_bytes = beep.astype(np.int16).tobytes()
+                                    silence_bytes = b'\x00' * int(sr * 0.7 * 2)
+                                    out.write(beep_bytes)
+                                    out.write(silence_bytes)
+                                    continue
+                                    
+                                # 正常音频流
+                                out.write(item)
+                    except Exception as e:
+                        print(f"[gemini_v2][TTS] 后台播放线程异常: {e}", flush=True)
+
+                self._shared_player_thread = threading.Thread(target=_shared_play_worker, daemon=True)
+                self._shared_player_thread.start()
+        
+        if play_beep:
+            self._shared_audio_queue.put("BEEP")
+
+        parts: List[bytes] = []
+        
+        def _on_chunk(chunk: bytes):
+            parts.append(chunk)
+            self._shared_audio_queue.put(chunk)
+
+        try:
+            got = self._consume_doubao_tts_stream(resp, on_pcm_chunk=_on_chunk)
+        finally:
+            pass # 注意：不再像以前那样立刻发送 None 毒药丸，因为队列要被下一句话复用
+            
+        if not got:
+            return None
+            
+        raw = b"".join(parts)
+        wav_bytes = self._pcm_to_wav_bytes(raw, self.doubao_sample_rate)
+        return {"raw": wav_bytes, "ext": ".wav"}
+
     def _call_doubao_tts_buffered(self, text: str) -> Optional[Dict[str, Any]]:
         """mp3/ogg 等非 pcm：整段缓冲后再播放/落盘。"""
         audio_format = (
@@ -1280,19 +1435,60 @@ class TTSPlayer:
         ext = str(payload.get("ext") or "").lower()
         p = payload.get("path")
 
-        if raw and os.name == "nt" and ext == ".wav":
-            import winsound
-
-            winsound.PlaySound(raw, winsound.SND_MEMORY)
+        if not raw:
+            print("[gemini_v2][TTS] 播放失败：无音频数据。", flush=True)
             return
-        if isinstance(p, Path) and p.is_file() and os.name == "nt" and p.suffix.lower() == ".wav":
-            import winsound
 
-            winsound.PlaySound(str(p), winsound.SND_FILENAME)
+        try:
+            import sounddevice as sd
+            import numpy as np
+        except ImportError:
+            print(
+                "[gemini_v2][TTS] 播放需要 sounddevice 和 numpy（pip install sounddevice numpy）",
+                flush=True,
+            )
             return
-        print("[gemini_v2][TTS] 自动播放：非 wav 或未在 Windows 上时请改用 --doubao-tts-audio-format pcm + sounddevice。")
 
-    def speak(self, text: str, turn: int) -> None:
+        try:
+            if ext == ".wav":
+                import wave
+                import io
+                with io.BytesIO(raw) as buf:
+                    with wave.open(buf, 'rb') as wf:
+                        n_channels = wf.getnchannels()
+                        sampwidth = wf.getsampwidth()
+                        framerate = wf.getframerate()
+                        frames = wf.readframes(wf.getnframes())
+                        
+                        if sampwidth == 2: # 16-bit PCM
+                            audio_array = np.frombuffer(frames, dtype=np.int16)
+                        elif sampwidth == 4: # 32-bit PCM
+                            audio_array = np.frombuffer(frames, dtype=np.int32)
+                        else:
+                            print(f"[gemini_v2][TTS] 不支持的 WAV 采样宽度: {sampwidth}", flush=True)
+                            return
+                        
+                        if n_channels > 1:
+                            print(f"[gemini_v2][TTS] WAV 文件包含 {n_channels} 声道，仅播放第一个声道。", flush=True)
+                            audio_array = audio_array[::n_channels]
+                        
+                        # 核心修复：sounddevice 的流式预热会消耗开头缓冲。必须在开头补充一段静音数据预热流。
+                        # 经测试，纯缓冲全文件播放时补 400ms 是最稳妥的。
+                        padding = np.zeros(int(framerate * 0.4), dtype=audio_array.dtype)
+                        audio_array = np.concatenate([padding, audio_array])
+                        
+                        sd.play(audio_array, samplerate=framerate, blocking=True)
+            elif ext == ".pcm":
+                audio_array = np.frombuffer(raw, dtype=np.int16)
+                padding = np.zeros(int(self.doubao_sample_rate * 0.4), dtype=audio_array.dtype)
+                audio_array = np.concatenate([padding, audio_array])
+                sd.play(audio_array, samplerate=self.doubao_sample_rate, blocking=True)
+            else:
+                print(f"[gemini_v2][TTS] 不支持的音频格式 '{ext}'，请使用 .wav 或 .pcm。", flush=True)
+        except Exception as e:
+            print(f"[gemini_v2][TTS] sounddevice 播放异常: {e}", flush=True)
+
+    def speak(self, text: str, turn: int, is_first_chunk: bool = True) -> None:
         t = (text or "").strip()
         if not t:
             return
@@ -1303,85 +1499,21 @@ class TTSPlayer:
         )
         print(f"[gemini_v2][TTS] 第 {turn} 轮流式合成中…", flush=True)
 
-        if audio_format != "pcm":
-            payload = self._call_doubao_tts_buffered(t)
-            if payload is None:
-                print("[gemini_v2][TTS] doubao 未返回可用音频。")
-                return
-            if self.play:
-                self._play_wav_payload(payload)
-                print(f"[gemini_v2][TTS] 第 {turn} 轮语音已播放。")
-            if self.save:
-                raw = payload.get("raw")
-                ext = str(payload.get("ext") or ".wav")
-                if raw:
-                    sp = self._write_audio_bytes(raw, turn, ext)
-                    print(f"[gemini_v2][TTS] 第 {turn} 轮语音已保存: {sp}")
-            if not self.play and not self.save:
-                print("[gemini_v2][TTS] 已合成语音（未播放、未保存）。")
+        payload = self._call_doubao_tts_stream(t, play_beep=is_first_chunk)
+        if payload is None:
+            print("[gemini_v2][TTS] doubao 未返回可用音频。")
             return
-
-        resp = self._doubao_tts_request(t, "pcm")
-        if resp is None:
-            return
-        if resp.status_code >= 400:
-            print(f"[gemini_v2][TTS] HTTP {resp.status_code}: {(resp.text or '')[:300]}", flush=True)
-            return
-
-        pcm_chunks: List[bytes] = []
-        out_stream = None
-
+            
         if self.play:
-            try:
-                import sounddevice as sd
-            except ImportError:
-                print(
-                    "[gemini_v2][TTS] 流式播放需要 sounddevice（pip install sounddevice）"
-                    "，将改为整段缓冲后用内存 wav 播放。",
-                    flush=True,
-                )
-                self._consume_doubao_tts_stream(resp, collect=pcm_chunks)
-                raw_pcm = b"".join(pcm_chunks)
-                if raw_pcm:
-                    wav_b = self._pcm_to_wav_bytes(raw_pcm, self.doubao_sample_rate)
-                    self._play_wav_payload({"raw": wav_b, "ext": ".wav"})
-                    print(f"[gemini_v2][TTS] 第 {turn} 轮语音已播放。", flush=True)
-                    if self.save:
-                        sp = self._write_audio_bytes(wav_b, turn, ".wav")
-                        print(f"[gemini_v2][TTS] 第 {turn} 轮语音已保存: {sp}", flush=True)
-                return
-
-            out_stream = sd.RawOutputStream(
-                samplerate=self.doubao_sample_rate,
-                channels=1,
-                dtype="int16",
-                blocksize=4096,
-            )
-            out_stream.start()
-
-            def _on_chunk(b: bytes) -> None:
-                pcm_chunks.append(b)
-                if out_stream is not None:
-                    out_stream.write(b)
-
-            try:
-                if not self._consume_doubao_tts_stream(resp, on_pcm_chunk=_on_chunk):
-                    print("[gemini_v2][TTS] doubao 未返回可用音频。", flush=True)
-            finally:
-                out_stream.stop()
-                out_stream.close()
-        else:
-            self._consume_doubao_tts_stream(resp, collect=pcm_chunks)
-            if not pcm_chunks:
-                print("[gemini_v2][TTS] doubao 未返回可用音频。", flush=True)
-
-        raw_pcm = b"".join(pcm_chunks)
-        if self.play and raw_pcm:
-            print(f"[gemini_v2][TTS] 第 {turn} 轮语音已播放。", flush=True)
-        if self.save and raw_pcm:
-            wav_b = self._pcm_to_wav_bytes(raw_pcm, self.doubao_sample_rate)
-            sp = self._write_audio_bytes(wav_b, turn, ".wav")
-            print(f"[gemini_v2][TTS] 第 {turn} 轮语音已保存: {sp}", flush=True)
+            print(f"[gemini_v2][TTS] 第 {turn} 轮语音已流式播放完毕。")
+        if self.save:
+            raw = payload.get("raw")
+            ext = str(payload.get("ext") or ".wav")
+            if raw:
+                sp = self._write_audio_bytes(raw, turn, ext)
+                print(f"[gemini_v2][TTS] 第 {turn} 轮语音已保存: {sp}")
+        if not self.play and not self.save:
+            print("[gemini_v2][TTS] 已合成语音（未播放、未保存）。")
         if not self.play and not self.save and raw_pcm:
             print("[gemini_v2][TTS] 已拉取流式语音（未播放、未保存）。", flush=True)
 
@@ -1490,19 +1622,19 @@ def _build_argparser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--tts-speed",
         type=float,
-        default=1.8,
-        help="豆包TTS语速倍率（默认 1.8；按官方映射写入 speech_rate）",
+        default=2.8,
+        help="豆包TTS语速倍率（默认 2.8；按官方映射写入 speech_rate）",
     )
     ap.add_argument(
         "--doubao-tts-emotion",
-        default="angry",
+        default="",
         help="TTS 情感（如 happy、angry；不填则不带该字段，按音色能力为准）",
     )
     ap.add_argument(
         "--doubao-tts-emotion-scale",
         type=int,
-        default=None,
-        help="情感强度 1～5（需同时配置情感；不设则用 4）",
+        default=5,
+        help="情感强度 1～5（需同时配置情感；不设则用 5）",
     )
     ap.add_argument(
         "--doubao-tts-loudness",
@@ -1522,12 +1654,12 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--doubao-tts-resource-id",
-        default="seed-tts-1.0",  # Doubao TTS 1.0 model
-        help="豆包TTS: 资源ID（默认 seed-tts-1.0，用于模型1.0音色；若使用模型2.0音色需改为 seed-tts-2.0）",
+        default="seed-icl-2.0",  # 默认改为声音复刻模型2.0
+        help="豆包TTS: 资源ID（默认 seed-icl-2.0）",
     )
     ap.add_argument(
         "--doubao-tts-speaker",
-        default="",
+        default="S_XL8NxUsY1",
         help="豆包TTS: 音色 speaker（必填；需与 resource-id 配对：1.0音色用 seed-tts-1.0，2.0音色用 seed-tts-2.0）",
     )
     ap.add_argument(
