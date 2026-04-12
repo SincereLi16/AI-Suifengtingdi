@@ -1,0 +1,1115 @@
+{
+  "pipeline": "pipeline",
+  "file": "01-a.png",
+  "group": "01",
+  "annotated_image": "01-a_annotated.png",
+  "star_recog": {
+    "enabled": true,
+    "template_dir": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\星级模板",
+    "scale_ratios": [
+      0.32,
+      0.54,
+      0.76,
+      0.98,
+      1.2,
+      1.42
+    ],
+    "roi_side": 35,
+    "shift_right": 6,
+    "preprocess": "clahe",
+    "ambiguity_margin": 0.12,
+    "upgrade_min_score": 0.0,
+    "elapsed_s": 0.00880939999842667
+  },
+  "modules": {
+    "fightboard": {
+      "file": "01-a.png",
+      "pipeline": "fightboard_mobilenet",
+      "chess_backend": "mobilenet_v3_small",
+      "results": [
+        {
+          "bar_index": 1,
+          "bar_box": [
+            1035,
+            357,
+            103,
+            18
+          ],
+          "stage": "stage1",
+          "best": "兰博",
+          "best_score": 1.9946595430374146,
+          "second_score": 0.5491039454936981,
+          "gap": 1.4455555975437164,
+          "used_samples": 4,
+          "vote_top": [
+            {
+              "name": "兰博",
+              "votes": 4
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "兰博",
+              "score": 1.9946595430374146
+            },
+            {
+              "name": "菲兹",
+              "score": 0.5491039454936981
+            },
+            {
+              "name": "金克丝",
+              "score": 0.5155034810304642
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              1086.5,
+              503.0
+            ],
+            "inferred_row_from_y": 1,
+            "cell_row": 1,
+            "cell_col": 4,
+            "label": "第1排第4格",
+            "dist_to_cell_px": 64.43
+          },
+          "star": {
+            "pred": 2,
+            "pred_raw": 2,
+            "pred_score": 0.8352,
+            "second_score": 0.5486,
+            "margin_vs_second": 0.2866000000000001,
+            "scores": {
+              "1": 0.5486,
+              "2": 0.8352,
+              "3": 0.4001
+            },
+            "ambiguity": {
+              "pred_raw": 2,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              1024,
+              349,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 2,
+          "bar_box": [
+            916,
+            422,
+            106,
+            18
+          ],
+          "stage": "stage1",
+          "best": "凯南",
+          "best_score": 1.929982453584671,
+          "second_score": 0.9137071073055267,
+          "gap": 1.0162753462791443,
+          "used_samples": 4,
+          "vote_top": [
+            {
+              "name": "凯南",
+              "votes": 4
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "凯南",
+              "score": 1.929982453584671
+            },
+            {
+              "name": "提莫",
+              "score": 0.9137071073055267
+            },
+            {
+              "name": "璐璐",
+              "score": 0.632324606180191
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              969.0,
+              568.0
+            ],
+            "inferred_row_from_y": 2,
+            "cell_row": 2,
+            "cell_col": 2,
+            "label": "第2排第2格",
+            "dist_to_cell_px": 59.35
+          },
+          "star": {
+            "pred": 1,
+            "pred_raw": 1,
+            "pred_score": 0.5536,
+            "second_score": 0.3696,
+            "margin_vs_second": 0.184,
+            "scores": {
+              "1": 0.5536,
+              "2": 0.3678,
+              "3": 0.3696
+            },
+            "ambiguity": {
+              "pred_raw": 1,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              905,
+              414,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 3,
+          "bar_box": [
+            699,
+            653,
+            103,
+            18
+          ],
+          "stage": "stage1",
+          "best": "崔丝塔娜",
+          "best_score": 1.3191407918930054,
+          "second_score": 0.5614407062530518,
+          "gap": 0.7577000856399536,
+          "used_samples": 3,
+          "vote_top": [
+            {
+              "name": "崔丝塔娜",
+              "votes": 3
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "崔丝塔娜",
+              "score": 1.3191407918930054
+            },
+            {
+              "name": "基兰",
+              "score": 0.5614407062530518
+            },
+            {
+              "name": "波比",
+              "score": 0.5405783355236053
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              750.5,
+              719.0
+            ],
+            "inferred_row_from_y": 4,
+            "cell_row": 4,
+            "cell_col": 1,
+            "label": "第4排第1格",
+            "dist_to_cell_px": 28.66
+          },
+          "star": {
+            "pred": 2,
+            "pred_raw": 2,
+            "pred_score": 0.7449,
+            "second_score": 0.5458,
+            "margin_vs_second": 0.19910000000000005,
+            "scores": {
+              "1": 0.5458,
+              "2": 0.7449,
+              "3": 0.3367
+            },
+            "ambiguity": {
+              "pred_raw": 2,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              688,
+              645,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 4,
+          "bar_box": [
+            1508,
+            670,
+            103,
+            18
+          ],
+          "stage": "stage1",
+          "best": "克格莫",
+          "best_score": 2.617158681154251,
+          "second_score": 1.059294581413269,
+          "gap": 1.557864099740982,
+          "used_samples": 5,
+          "vote_top": [
+            {
+              "name": "克格莫",
+              "votes": 4
+            },
+            {
+              "name": "纳什男爵",
+              "votes": 1
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "克格莫",
+              "score": 2.617158681154251
+            },
+            {
+              "name": "塔姆",
+              "score": 1.059294581413269
+            },
+            {
+              "name": "蒙多医生",
+              "score": 0.6245744526386261
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              1559.5,
+              736.0
+            ],
+            "inferred_row_from_y": 4,
+            "cell_row": 4,
+            "cell_col": 7,
+            "label": "第4排第7格",
+            "dist_to_cell_px": 10.31
+          },
+          "star": {
+            "pred": 2,
+            "pred_raw": 2,
+            "pred_score": 0.6605,
+            "second_score": 0.5536,
+            "margin_vs_second": 0.1069,
+            "scores": {
+              "1": 0.5536,
+              "2": 0.6605,
+              "3": 0.2904
+            },
+            "ambiguity": {
+              "pred_raw": 2,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              1497,
+              662,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 5,
+          "bar_box": [
+            833,
+            678,
+            106,
+            18
+          ],
+          "stage": "stage1",
+          "best": "璐璐",
+          "best_score": 3.25305438041687,
+          "second_score": 1.378206193447113,
+          "gap": 1.874848186969757,
+          "used_samples": 5,
+          "vote_top": [
+            {
+              "name": "璐璐",
+              "votes": 5
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "璐璐",
+              "score": 3.25305438041687
+            },
+            {
+              "name": "凯南",
+              "score": 1.378206193447113
+            },
+            {
+              "name": "提莫",
+              "score": 0.36873939633369446
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              886.0,
+              744.0
+            ],
+            "inferred_row_from_y": 4,
+            "cell_row": 4,
+            "cell_col": 2,
+            "label": "第4排第2格",
+            "dist_to_cell_px": 14.56
+          },
+          "star": {
+            "pred": 1,
+            "pred_raw": 1,
+            "pred_score": 0.5834,
+            "second_score": 0.2875,
+            "margin_vs_second": 0.29590000000000005,
+            "scores": {
+              "1": 0.5834,
+              "2": 0.2803,
+              "3": 0.2875
+            },
+            "ambiguity": {
+              "pred_raw": 1,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              822,
+              670,
+              35,
+              35
+            ]
+          }
+        }
+      ],
+      "equip_by_bar": {
+        "1": [
+          {
+            "name": "离子火花",
+            "score": 0.9038723707199097,
+            "gx1": 1079,
+            "gy1": 381,
+            "side": 25,
+            "rank": 1
+          },
+          {
+            "name": "狂徒铠甲",
+            "score": 0.8832977414131165,
+            "gx1": 1047,
+            "gy1": 382,
+            "side": 24,
+            "rank": 2
+          }
+        ],
+        "2": [],
+        "3": [],
+        "4": [],
+        "5": []
+      },
+      "star_recog": {
+        "enabled": true,
+        "template_dir": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\星级模板",
+        "scale_ratios": [
+          0.32,
+          0.54,
+          0.76,
+          0.98,
+          1.2,
+          1.42
+        ],
+        "roi_side": 35,
+        "shift_right": 6,
+        "preprocess": "clahe",
+        "ambiguity_margin": 0.12,
+        "upgrade_min_score": 0.0,
+        "elapsed_s": 0.00880939999842667
+      }
+    },
+    "player": {
+      "file": "01-a.png",
+      "mode": "onepass_stitch_ocr_pair_merged",
+      "stitched_image": "01-a_player_stitch.png",
+      "fields": {
+        "phase": {
+          "name": "阶段",
+          "raw": "& 3-1",
+          "parsed": "&3-1"
+        },
+        "level": {
+          "name": "等级",
+          "raw": "5级",
+          "parsed": "5级"
+        },
+        "exp": {
+          "name": "经验",
+          "raw": "6/20",
+          "parsed": "6/20"
+        },
+        "gold": {
+          "name": "金币",
+          "raw": "54",
+          "parsed": "54"
+        },
+        "streak": {
+          "name": "连胜/连败",
+          "raw": "0",
+          "parsed": "无连胜/连败"
+        },
+        "bonds": {
+          "name": "羁绊栏",
+          "raw": "约德尔人 ? 4 2/4/6/8 | 护卫 2 2/4/6 | 法师 2 2/4/6 | 虚空 1/2 | 枪手 1/2 | 艾欧尼亚 1/3 | 狙神 1/2 | 约德尔人 ? 2/4/6/8 | 护卫 2 2/4/6 | 法师 2 2/4/6 | 虚空 1/2 | 枪手 1/2 | 艾欧尼亚 1/3 | 狙神 1/2",
+          "parsed": "识别字段：2约德尔人 / 2护卫 / 2法师 / 1虚空 / 1枪手 / 1艾欧尼亚 / 1狙神",
+          "bond_items": [
+            "2约德尔人",
+            "2护卫",
+            "2法师",
+            "1虚空",
+            "1枪手",
+            "1艾欧尼亚",
+            "1狙神"
+          ],
+          "bond_summary": "识别字段：2约德尔人 / 2护卫 / 2法师 / 1虚空 / 1枪手 / 1艾欧尼亚 / 1狙神",
+          "bond_cells": [
+            {
+              "index": 1,
+              "ocr_rows": "约德尔人 ? 4 2/4/6/8",
+              "piece": "2约德尔人",
+              "raw": "约德尔人 ? 4 2/4/6/8"
+            },
+            {
+              "index": 2,
+              "ocr_rows": "护卫 2 2/4/6",
+              "piece": "2护卫",
+              "raw": "护卫 2 2/4/6"
+            },
+            {
+              "index": 3,
+              "ocr_rows": "法师 2 2/4/6",
+              "piece": "2法师",
+              "raw": "法师 2 2/4/6"
+            },
+            {
+              "index": 4,
+              "ocr_rows": "虚空 1/2",
+              "piece": "1虚空",
+              "raw": "虚空 1/2"
+            },
+            {
+              "index": 5,
+              "ocr_rows": "枪手 1/2",
+              "piece": "1枪手",
+              "raw": "枪手 1/2"
+            },
+            {
+              "index": 6,
+              "ocr_rows": "艾欧尼亚 1/3",
+              "piece": "1艾欧尼亚",
+              "raw": "艾欧尼亚 1/3"
+            },
+            {
+              "index": 7,
+              "ocr_rows": "狙神 1/2",
+              "piece": "1狙神",
+              "raw": "狙神 1/2"
+            },
+            {
+              "index": 1,
+              "ocr_rows": "约德尔人 ? 2/4/6/8",
+              "piece": "2约德尔人",
+              "raw": "约德尔人 ? 2/4/6/8"
+            },
+            {
+              "index": 2,
+              "ocr_rows": "护卫 2 2/4/6",
+              "piece": "2护卫",
+              "raw": "护卫 2 2/4/6"
+            },
+            {
+              "index": 3,
+              "ocr_rows": "法师 2 2/4/6",
+              "piece": "2法师",
+              "raw": "法师 2 2/4/6"
+            },
+            {
+              "index": 4,
+              "ocr_rows": "虚空 1/2",
+              "piece": "1虚空",
+              "raw": "虚空 1/2"
+            },
+            {
+              "index": 5,
+              "ocr_rows": "枪手 1/2",
+              "piece": "1枪手",
+              "raw": "枪手 1/2"
+            },
+            {
+              "index": 6,
+              "ocr_rows": "艾欧尼亚 1/3",
+              "piece": "1艾欧尼亚",
+              "raw": "艾欧尼亚 1/3"
+            },
+            {
+              "index": 7,
+              "ocr_rows": "狙神 1/2",
+              "piece": "1狙神",
+              "raw": "狙神 1/2"
+            }
+          ]
+        },
+        "hp_nick": {
+          "name": "血量/昵称",
+          "raw": "100 |  |  | 90 | 87 | 83 | 78 | ",
+          "parsed": [
+            "Top1 开始截图任务暗影岛之驴 100血",
+            "Top2 芯猫之影仪行96 0血",
+            "Top3 布隆小法加小91 0血",
+            "Top4 我 90血",
+            "Top5 肥胖的石头人 87血",
+            "Top6 首相老铁 83血",
+            "Top7 棘背蓝的假装 78血",
+            "Top8 赏金猎人的手指 0血"
+          ],
+          "player_lines": [
+            "Top1 开始截图任务暗影岛之驴 100血",
+            "Top2 芯猫之影仪行96 0血",
+            "Top3 布隆小法加小91 0血",
+            "Top4 我 90血",
+            "Top5 肥胖的石头人 87血",
+            "Top6 首相老铁 83血",
+            "Top7 棘背蓝的假装 78血",
+            "Top8 赏金猎人的手指 0血"
+          ],
+          "player_cells": [
+            {
+              "display": "Top1 开始截图任务暗影岛之驴 100血",
+              "hp": "100",
+              "id_text": "开始截图任务暗影岛之驴",
+              "ocr_rows": "100"
+            },
+            {
+              "display": "Top2 芯猫之影仪行96 0血",
+              "hp": "0",
+              "id_text": "芯猫之影仪行96",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top3 布隆小法加小91 0血",
+              "hp": "0",
+              "id_text": "布隆小法加小91",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top4 我 90血",
+              "hp": "90",
+              "id_text": "我",
+              "ocr_rows": "90"
+            },
+            {
+              "display": "Top5 肥胖的石头人 87血",
+              "hp": "87",
+              "id_text": "肥胖的石头人",
+              "ocr_rows": "87"
+            },
+            {
+              "display": "Top6 首相老铁 83血",
+              "hp": "83",
+              "id_text": "首相老铁",
+              "ocr_rows": "83"
+            },
+            {
+              "display": "Top7 棘背蓝的假装 78血",
+              "hp": "78",
+              "id_text": "棘背蓝的假装",
+              "ocr_rows": "78"
+            },
+            {
+              "display": "Top8 赏金猎人的手指 0血",
+              "hp": "0",
+              "id_text": "赏金猎人的手指",
+              "ocr_rows": ""
+            }
+          ]
+        }
+      },
+      "pair_stems": [
+        "01-a",
+        "01-b"
+      ]
+    },
+    "equip_column": {
+      "equip_roi": [
+        10,
+        120,
+        190,
+        920
+      ],
+      "matches": [
+        {
+          "template_file": "反曲之弓.png",
+          "name_stem": "反曲之弓",
+          "score": 0.961039662361145,
+          "global_x": 26,
+          "global_y": 210,
+          "side": 61,
+          "roi_index": 3,
+          "rank_in_block": 1
+        },
+        {
+          "template_file": "拳套.png",
+          "name_stem": "拳套",
+          "score": 0.9586616158485413,
+          "global_x": 26,
+          "global_y": 289,
+          "side": 61,
+          "roi_index": 5,
+          "rank_in_block": 1
+        },
+        {
+          "template_file": "巨人腰带.png",
+          "name_stem": "巨人腰带",
+          "score": 0.931342363357544,
+          "global_x": 26,
+          "global_y": 369,
+          "side": 61,
+          "roi_index": 7,
+          "rank_in_block": 1
+        }
+      ],
+      "match_count": 3
+    }
+  },
+  "analysis": {
+    "group_traits_merged": {
+      "trait_count_max": {
+        "护卫": 2,
+        "枪手": 1,
+        "法师": 2,
+        "狙神": 1,
+        "约德尔人": 2,
+        "艾欧尼亚": 1,
+        "虚空": 1
+      },
+      "merged_bonds_one_line": "2护卫 / 1枪手 / 2法师 / 1狙神 / 2约德尔人 / 1艾欧尼亚 / 1虚空"
+    },
+    "cross_validation": {
+      "status": "mismatch_greedy_not_helped",
+      "greedy_fix_mode": "low_or_mismatch",
+      "rules_version": "v2_bond_plus_emblem_expected",
+      "trait_loss": 2,
+      "trait_loss_after": 2,
+      "consistent": false,
+      "trait_diff": {
+        "约德尔人": {
+          "expected": 2,
+          "board": 4,
+          "delta_board_minus_expected": 2
+        }
+      },
+      "player_traits_from_bonds": {
+        "护卫": 2,
+        "枪手": 1,
+        "法师": 2,
+        "狙神": 1,
+        "约德尔人": 2,
+        "艾欧尼亚": 1,
+        "虚空": 1
+      },
+      "emblem_bonus_applied_to_expected": {},
+      "player_traits_used": {
+        "艾欧尼亚": 1,
+        "虚空": 1,
+        "法师": 2,
+        "约德尔人": 2,
+        "狙神": 1,
+        "枪手": 1,
+        "护卫": 2
+      },
+      "board_trait_counts": {
+        "护卫": 2,
+        "约德尔人": 4,
+        "艾欧尼亚": 1,
+        "枪手": 1,
+        "法师": 2,
+        "狙神": 1,
+        "虚空": 1
+      },
+      "inference_notes": [
+        "在「羁绊栏期望已含场上纹章赐羁绊」的前提下，trait_loss 仍无法仅靠 agg_top/vote_top 换名降低。可检查羁绊栏 OCR、棋子识别或扩大候选；若纹章装备漏检，期望/棋盘仍会偏差。"
+      ],
+      "changes": [],
+      "suspect_bar_indices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    }
+  },
+  "confirmed_fightboard_results": [
+    {
+      "bar_index": 1,
+      "bar_box": [
+        1035,
+        357,
+        103,
+        18
+      ],
+      "stage": "stage1",
+      "best": "兰博",
+      "best_score": 1.9946595430374146,
+      "second_score": 0.5491039454936981,
+      "gap": 1.4455555975437164,
+      "used_samples": 4,
+      "vote_top": [
+        {
+          "name": "兰博",
+          "votes": 4
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "兰博",
+          "score": 1.9946595430374146
+        },
+        {
+          "name": "菲兹",
+          "score": 0.5491039454936981
+        },
+        {
+          "name": "金克丝",
+          "score": 0.5155034810304642
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          1086.5,
+          503.0
+        ],
+        "inferred_row_from_y": 1,
+        "cell_row": 1,
+        "cell_col": 4,
+        "label": "第1排第4格",
+        "dist_to_cell_px": 64.43
+      },
+      "star": {
+        "pred": 2,
+        "pred_raw": 2,
+        "pred_score": 0.8352,
+        "second_score": 0.5486,
+        "margin_vs_second": 0.2866000000000001,
+        "scores": {
+          "1": 0.5486,
+          "2": 0.8352,
+          "3": 0.4001
+        },
+        "ambiguity": {
+          "pred_raw": 2,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          1024,
+          349,
+          35,
+          35
+        ]
+      },
+      "trait_cv_suspect": true,
+      "trait_cv_suspect_reason": "greedy_exhausted_no_candidate_reduces_trait_loss"
+    },
+    {
+      "bar_index": 2,
+      "bar_box": [
+        916,
+        422,
+        106,
+        18
+      ],
+      "stage": "stage1",
+      "best": "凯南",
+      "best_score": 1.929982453584671,
+      "second_score": 0.9137071073055267,
+      "gap": 1.0162753462791443,
+      "used_samples": 4,
+      "vote_top": [
+        {
+          "name": "凯南",
+          "votes": 4
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "凯南",
+          "score": 1.929982453584671
+        },
+        {
+          "name": "提莫",
+          "score": 0.9137071073055267
+        },
+        {
+          "name": "璐璐",
+          "score": 0.632324606180191
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          969.0,
+          568.0
+        ],
+        "inferred_row_from_y": 2,
+        "cell_row": 2,
+        "cell_col": 2,
+        "label": "第2排第2格",
+        "dist_to_cell_px": 59.35
+      },
+      "star": {
+        "pred": 1,
+        "pred_raw": 1,
+        "pred_score": 0.5536,
+        "second_score": 0.3696,
+        "margin_vs_second": 0.184,
+        "scores": {
+          "1": 0.5536,
+          "2": 0.3678,
+          "3": 0.3696
+        },
+        "ambiguity": {
+          "pred_raw": 1,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          905,
+          414,
+          35,
+          35
+        ]
+      },
+      "trait_cv_suspect": true,
+      "trait_cv_suspect_reason": "greedy_exhausted_no_candidate_reduces_trait_loss"
+    },
+    {
+      "bar_index": 3,
+      "bar_box": [
+        699,
+        653,
+        103,
+        18
+      ],
+      "stage": "stage1",
+      "best": "崔丝塔娜",
+      "best_score": 1.3191407918930054,
+      "second_score": 0.5614407062530518,
+      "gap": 0.7577000856399536,
+      "used_samples": 3,
+      "vote_top": [
+        {
+          "name": "崔丝塔娜",
+          "votes": 3
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "崔丝塔娜",
+          "score": 1.3191407918930054
+        },
+        {
+          "name": "基兰",
+          "score": 0.5614407062530518
+        },
+        {
+          "name": "波比",
+          "score": 0.5405783355236053
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          750.5,
+          719.0
+        ],
+        "inferred_row_from_y": 4,
+        "cell_row": 4,
+        "cell_col": 1,
+        "label": "第4排第1格",
+        "dist_to_cell_px": 28.66
+      },
+      "star": {
+        "pred": 2,
+        "pred_raw": 2,
+        "pred_score": 0.7449,
+        "second_score": 0.5458,
+        "margin_vs_second": 0.19910000000000005,
+        "scores": {
+          "1": 0.5458,
+          "2": 0.7449,
+          "3": 0.3367
+        },
+        "ambiguity": {
+          "pred_raw": 2,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          688,
+          645,
+          35,
+          35
+        ]
+      },
+      "trait_cv_suspect": true,
+      "trait_cv_suspect_reason": "greedy_exhausted_no_candidate_reduces_trait_loss"
+    },
+    {
+      "bar_index": 4,
+      "bar_box": [
+        1508,
+        670,
+        103,
+        18
+      ],
+      "stage": "stage1",
+      "best": "克格莫",
+      "best_score": 2.617158681154251,
+      "second_score": 1.059294581413269,
+      "gap": 1.557864099740982,
+      "used_samples": 5,
+      "vote_top": [
+        {
+          "name": "克格莫",
+          "votes": 4
+        },
+        {
+          "name": "纳什男爵",
+          "votes": 1
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "克格莫",
+          "score": 2.617158681154251
+        },
+        {
+          "name": "塔姆",
+          "score": 1.059294581413269
+        },
+        {
+          "name": "蒙多医生",
+          "score": 0.6245744526386261
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          1559.5,
+          736.0
+        ],
+        "inferred_row_from_y": 4,
+        "cell_row": 4,
+        "cell_col": 7,
+        "label": "第4排第7格",
+        "dist_to_cell_px": 10.31
+      },
+      "star": {
+        "pred": 2,
+        "pred_raw": 2,
+        "pred_score": 0.6605,
+        "second_score": 0.5536,
+        "margin_vs_second": 0.1069,
+        "scores": {
+          "1": 0.5536,
+          "2": 0.6605,
+          "3": 0.2904
+        },
+        "ambiguity": {
+          "pred_raw": 2,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          1497,
+          662,
+          35,
+          35
+        ]
+      },
+      "trait_cv_suspect": true,
+      "trait_cv_suspect_reason": "greedy_exhausted_no_candidate_reduces_trait_loss"
+    },
+    {
+      "bar_index": 5,
+      "bar_box": [
+        833,
+        678,
+        106,
+        18
+      ],
+      "stage": "stage1",
+      "best": "璐璐",
+      "best_score": 3.25305438041687,
+      "second_score": 1.378206193447113,
+      "gap": 1.874848186969757,
+      "used_samples": 5,
+      "vote_top": [
+        {
+          "name": "璐璐",
+          "votes": 5
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "璐璐",
+          "score": 3.25305438041687
+        },
+        {
+          "name": "凯南",
+          "score": 1.378206193447113
+        },
+        {
+          "name": "提莫",
+          "score": 0.36873939633369446
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          886.0,
+          744.0
+        ],
+        "inferred_row_from_y": 4,
+        "cell_row": 4,
+        "cell_col": 2,
+        "label": "第4排第2格",
+        "dist_to_cell_px": 14.56
+      },
+      "star": {
+        "pred": 1,
+        "pred_raw": 1,
+        "pred_score": 0.5834,
+        "second_score": 0.2875,
+        "margin_vs_second": 0.29590000000000005,
+        "scores": {
+          "1": 0.5834,
+          "2": 0.2803,
+          "3": 0.2875
+        },
+        "ambiguity": {
+          "pred_raw": 1,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          822,
+          670,
+          35,
+          35
+        ]
+      },
+      "trait_cv_suspect": true,
+      "trait_cv_suspect_reason": "greedy_exhausted_no_candidate_reduces_trait_loss"
+    }
+  ]
+}

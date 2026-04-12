@@ -1,0 +1,14 @@
+LICENSE
+LICENSE.data
+MANIFEST.in
+README.md
+setup.cfg
+setup.py
+zhconv/__init__.py
+zhconv/__main__.py
+zhconv/zhcdict.json
+zhconv/zhconv.py
+zhconv.egg-info/PKG-INFO
+zhconv.egg-info/SOURCES.txt
+zhconv.egg-info/dependency_links.txt
+zhconv.egg-info/top_level.txt

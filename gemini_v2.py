@@ -53,6 +53,8 @@ import wave
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from audio_manager import get_audio_manager
+
 import gemini_v1 as gv
 from gemini_v1 import (
     DEFAULT_IMG_DIR,
@@ -644,20 +646,19 @@ def run_coach_v2_after_summary(
                         break
                     text_chunk = text_chunk.strip()
                     if text_chunk:
+                        # 从 _on_chunk 里剥离，改在即将发生网络请求并获得 PCM 块的前一刻推入字幕指令
+                        am = get_audio_manager()
+                        am.show_subtitle(text_chunk)
+                        
                         # 对于切分的片段，丢给 TTSPlayer
                         if on_answer is not None:
                             try:
-                                # 只在第一段短句时播放唤醒“滴”声
+                                # turn 控制外部的大回合，sub_turn 控制长文本切分的子段落
                                 is_first = (sub_turn == 1)
                                 
-                                # 为了兼容原版只接收两个参数的回调签名，这里做个检测或分发
-                                import inspect
-                                sig = inspect.signature(on_answer)
-                                if "is_first_chunk" in sig.parameters:
-                                    on_answer(text_chunk, turn, is_first_chunk=is_first)
-                                else:
-                                    # 如果外部传入的是旧版本方法，我们只能强行调用或放弃滴声控制
-                                    on_answer(text_chunk, turn)
+                                # 这里直接调用 on_answer(text_chunk, turn, is_first_chunk=is_first)
+                                # 不做任何的 try-except 降级，因为我们已经明确传入的就是带这个参数的 tts_callback
+                                on_answer(text_chunk, turn, is_first_chunk=is_first)
                                     
                             except Exception as e:
                                 print(f"[{log_prefix}] 并发 TTS 播放异常: {e}", flush=True)
@@ -672,6 +673,12 @@ def run_coach_v2_after_summary(
             now = time.perf_counter()
             if first_chunk_ts[0] is None:
                 first_chunk_ts[0] = now
+                # 当大模型开始流式输出第一个文字块时，立刻排入第二声 Beep 和 0.5s 停顿
+                am = get_audio_manager()
+                print("[gemini_v2][TTS] 播放第二声 Beep", flush=True)
+                am.play_beep(freq=440)
+                am.play_silence(1.0)
+                
             stream_buf.append(chunk)
             
             # 为了防止句子过短导致 TTS API 走默认音色或分配错误韵律，强制第一段必须积累足够的上下文。
@@ -680,13 +687,19 @@ def run_coach_v2_after_summary(
             for char in chunk:
                 sentence_buf.append(char)
                 if not first_sentence_sent[0]:
-                    if char in PUNCTS:
+                    if char in {"。", "！", "？", "!", "?", "；", ";", "\n", "，", ","}:
                         s = "".join(sentence_buf).strip()
-                        # 声音复刻模型 (ICL) 需要足够长的上下文（建议 15-20 字以上）才能稳定还原音色和语速
-                        if s and len(s) >= 15:
+                        # 声音复刻模型 (ICL) 需要足够长的上下文（建议 35 字以上）才能稳定还原音色和语速
+                        if s and len(s) >= 35:
                             tts_tasks.put(s)
                             sentence_buf.clear()
                             first_sentence_sent[0] = True
+                else:
+                    if char in {"。", "！", "？", "!", "?", "；", ";", "\n", "，", ","}:
+                        s = "".join(sentence_buf).strip()
+                        if s:
+                            tts_tasks.put(s)
+                            sentence_buf.clear()
 
             if print_to_tty and (now - flush_ts[0] >= 0.2):
                 out = "".join(stream_buf)
@@ -695,8 +708,16 @@ def run_coach_v2_after_summary(
                 flush_ts[0] = now
 
         # 不再尝试给绑定的方法 (bound method) 赋值属性
+ 
+  
+        model_choice = "google/gemini-2.5-flash" if getattr(args, "use_gemini", False) else None
+        
+        # 避免作用域问题，如果在 _on_chunk 外部引入 audio_manager
+        from audio_manager import get_audio_manager
+        
         answer_raw = _coach_chat_turn_streaming(
             chat_hist,
+            model=model_choice,
             temperature=0.35,
             on_stream_chunk=_on_chunk,
         )
@@ -706,6 +727,8 @@ def run_coach_v2_after_summary(
         # 把剩余还没发送的文本发给 TTS，并等待所有 TTS 任务播放完
         s = "".join(sentence_buf).strip()
         if s:
+            am = get_audio_manager()
+            am.show_subtitle(s)
             tts_tasks.put(s)
         tts_tasks.put(None)
         
@@ -717,15 +740,6 @@ def run_coach_v2_after_summary(
         # 必须等待声音彻底播完，才能进入下一轮
         tts_thread.join()
         
-        # 当所有文本切分短句都丢给底层的共享队列后，发送毒药丸让共享音频线程结束
-        if on_answer is not None and getattr(on_answer, "__self__", None) is not None:
-            tts_player_instance = getattr(on_answer, "__self__")
-            if hasattr(tts_player_instance, "_shared_audio_queue"):
-                # 注意：如果外部使用其他播放器，这里就不执行。确保我们修改的是内部 TTSPlayer
-                tts_player_instance._shared_audio_queue.put(None)
-                if tts_player_instance._shared_player_thread is not None:
-                    tts_player_instance._shared_player_thread.join()
-
         total_sec = t_ll1 - t_ll0
         if first_chunk_ts[0] is not None:
             ttft = first_chunk_ts[0] - t_ll0
@@ -1143,11 +1157,6 @@ class TTSPlayer:
         ).strip().lower()
         self.doubao_sample_rate = int(getattr(args, "doubao_tts_sample_rate", 24000) or 24000)
         
-        # 共享流式音频队列与状态，用于无缝拼接多个短句
-        self._shared_audio_queue: Optional[queue.Queue] = None
-        self._shared_player_thread: Optional[threading.Thread] = None
-        self._shared_player_lock = threading.Lock()
-        
         try:
             import requests
             self.session = requests.Session()
@@ -1345,58 +1354,24 @@ class TTSPlayer:
         if resp.status_code >= 400:
             raise RuntimeError(f"豆包 TTS HTTP {resp.status_code}: {(resp.text or '')[:300]}")
             
-        import sounddevice as sd
-        import numpy as np
-        
-        # 懒加载初始化全局共享的音频输出流和队列
-        with self._shared_player_lock:
-            if self._shared_player_thread is None or not self._shared_player_thread.is_alive():
-                self._shared_audio_queue = queue.Queue()
-                
-                def _shared_play_worker():
-                    try:
-                        with sd.RawOutputStream(
-                            samplerate=self.doubao_sample_rate, 
-                            channels=1, 
-                            dtype="int16"
-                        ) as out:
-                            while True:
-                                item = self._shared_audio_queue.get()
-                                if item is None:
-                                    break
-                                
-                                # 处理命令：比如播报 beep 唤醒
-                                if isinstance(item, str) and item == "BEEP":
-                                    sr = self.doubao_sample_rate
-                                    t = np.linspace(0, 0.3, int(sr * 0.3), False)
-                                    beep = np.sin(440 * 2 * np.pi * t) * 4000
-                                    beep_bytes = beep.astype(np.int16).tobytes()
-                                    silence_bytes = b'\x00' * int(sr * 0.7 * 2)
-                                    out.write(beep_bytes)
-                                    out.write(silence_bytes)
-                                    continue
-                                    
-                                # 正常音频流
-                                out.write(item)
-                    except Exception as e:
-                        print(f"[gemini_v2][TTS] 后台播放线程异常: {e}", flush=True)
-
-                self._shared_player_thread = threading.Thread(target=_shared_play_worker, daemon=True)
-                self._shared_player_thread.start()
+        am = get_audio_manager()
         
         if play_beep:
-            self._shared_audio_queue.put("BEEP")
-
+            # 在播放第一段 TTS 之前，插入 beep 唤醒提示音和 0.5s 停顿
+            print("[gemini_v2][TTS] 播放第二声 Beep", flush=True)
+            am.play_beep(freq=440)
+            am.play_silence(0.5)
+            
         parts: List[bytes] = []
         
         def _on_chunk(chunk: bytes):
             parts.append(chunk)
-            self._shared_audio_queue.put(chunk)
+            am.play_audio(chunk)
 
         try:
             got = self._consume_doubao_tts_stream(resp, on_pcm_chunk=_on_chunk)
         finally:
-            pass # 注意：不再像以前那样立刻发送 None 毒药丸，因为队列要被下一句话复用
+            pass
             
         if not got:
             return None
@@ -1440,16 +1415,16 @@ class TTSPlayer:
             return
 
         try:
-            import sounddevice as sd
             import numpy as np
         except ImportError:
             print(
-                "[gemini_v2][TTS] 播放需要 sounddevice 和 numpy（pip install sounddevice numpy）",
+                "[gemini_v2][TTS] 播放需要 numpy（pip install numpy）",
                 flush=True,
             )
             return
 
         try:
+            am = get_audio_manager()
             if ext == ".wav":
                 import wave
                 import io
@@ -1472,21 +1447,13 @@ class TTSPlayer:
                             print(f"[gemini_v2][TTS] WAV 文件包含 {n_channels} 声道，仅播放第一个声道。", flush=True)
                             audio_array = audio_array[::n_channels]
                         
-                        # 核心修复：sounddevice 的流式预热会消耗开头缓冲。必须在开头补充一段静音数据预热流。
-                        # 经测试，纯缓冲全文件播放时补 400ms 是最稳妥的。
-                        padding = np.zeros(int(framerate * 0.4), dtype=audio_array.dtype)
-                        audio_array = np.concatenate([padding, audio_array])
-                        
-                        sd.play(audio_array, samplerate=framerate, blocking=True)
+                        am.play_audio(audio_array.tobytes())
             elif ext == ".pcm":
-                audio_array = np.frombuffer(raw, dtype=np.int16)
-                padding = np.zeros(int(self.doubao_sample_rate * 0.4), dtype=audio_array.dtype)
-                audio_array = np.concatenate([padding, audio_array])
-                sd.play(audio_array, samplerate=self.doubao_sample_rate, blocking=True)
+                am.play_audio(raw)
             else:
                 print(f"[gemini_v2][TTS] 不支持的音频格式 '{ext}'，请使用 .wav 或 .pcm。", flush=True)
         except Exception as e:
-            print(f"[gemini_v2][TTS] sounddevice 播放异常: {e}", flush=True)
+            print(f"[gemini_v2][TTS] AudioManager 播放异常: {e}", flush=True)
 
     def speak(self, text: str, turn: int, is_first_chunk: bool = True) -> None:
         t = (text or "").strip()
@@ -1499,7 +1466,10 @@ class TTSPlayer:
         )
         print(f"[gemini_v2][TTS] 第 {turn} 轮流式合成中…", flush=True)
 
-        payload = self._call_doubao_tts_stream(t, play_beep=is_first_chunk)
+        # 修复：原先依赖 tts_stream 内部的 is_first_chunk 参数播放 beep，但由于文本切分策略
+        # 可能会导致多个小句，并且在某些情况下 (比如文本过短) 不会立即触发。
+        # 我们把 play_beep 改为 false，将 beep 播放提前到接收流式数据的首个时刻
+        payload = self._call_doubao_tts_stream(t, play_beep=False)
         if payload is None:
             print("[gemini_v2][TTS] doubao 未返回可用音频。")
             return

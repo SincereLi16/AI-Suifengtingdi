@@ -1,0 +1,344 @@
+{
+  "pipeline": "pipeline",
+  "file": "01-a.png",
+  "group": "01",
+  "annotated_image": "01-a_annotated.png",
+  "star_recog": {
+    "enabled": true,
+    "template_dir": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\星级模板",
+    "scale_ratios": [
+      0.32,
+      0.54,
+      0.76,
+      0.98,
+      1.2,
+      1.42
+    ],
+    "roi_side": 35,
+    "shift_right": 6,
+    "preprocess": "clahe",
+    "ambiguity_margin": 0.12,
+    "upgrade_min_score": 0.0,
+    "elapsed_s": 0.004301599999962491
+  },
+  "modules": {
+    "fightboard": {
+      "file": "01-a.png",
+      "pipeline": "fightboard_mobilenet",
+      "chess_backend": "mobilenet_v3_small",
+      "results": [],
+      "equip_by_bar": {},
+      "star_recog": {
+        "enabled": true,
+        "template_dir": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\星级模板",
+        "scale_ratios": [
+          0.32,
+          0.54,
+          0.76,
+          0.98,
+          1.2,
+          1.42
+        ],
+        "roi_side": 35,
+        "shift_right": 6,
+        "preprocess": "clahe",
+        "ambiguity_margin": 0.12,
+        "upgrade_min_score": 0.0,
+        "elapsed_s": 0.004301599999962491
+      }
+    },
+    "player": {
+      "file": "01-a.png",
+      "mode": "onepass_stitch_ocr_pair_merged",
+      "stitched_image": "01-a_player_stitch.png",
+      "fields": {
+        "phase": {
+          "name": "阶段",
+          "raw": ")r\\appdat;",
+          "parsed": ")r\\appdat;"
+        },
+        "level": {
+          "name": "等级",
+          "raw": "",
+          "parsed": ""
+        },
+        "exp": {
+          "name": "经验",
+          "raw": "",
+          "parsed": ""
+        },
+        "gold": {
+          "name": "金币",
+          "raw": "",
+          "parsed": ""
+        },
+        "streak": {
+          "name": "连胜/连败",
+          "raw": "0",
+          "parsed": "无连胜/连败"
+        },
+        "bonds": {
+          "name": "羁绊栏",
+          "raw": "pyautogui) (1.0.1) satisfied: pygetwindow>=0.0.5 pyautogui) (0.0.9) tichio | ui) (0.1.3) satisfied: CFFI>=1.0i in c:\\us /ice) (2.0.0) | satis+iea: pycparser in c:\\us .0->sounddevice) (2.22) satisfied:pyrect in c:\\users V>=0.0.5->pyautogui) (0.2.0) | satisfied: pyperclip in C: us Fo->pyautogui) (1.11.0) of pip is available: 25.1 ease | run: python.exe -m pip insta ngdi V2 Agent. rocessDpiAwarenessContext() f otevt DDT ANAREN | fault using qt.conf Chttps://c 载模型至内存.： Fightboard_mobilenet(MobileNet | ara MobileNet torcn device=pri\\ onnx ocR ort device=cpu |载完毕，系统就绪！ | Fightboard_mobilenet（MobileNet ard MobileNet torch device=pri\\ onnx OCR ort device=cpu 裁空比 玄统站续！ | ction ection {'message_type response 75c payload_msg pay | on ion response {'message_type': d'\",'payload_msg':{'dialog_ic ery | oop L_RESPONSE with event 553 L_RESPONSE with event 550 RESPONSE with event 550 | L_RESPONSE with event 550 L_RESPONSE with event 550 L_RESPONSE with event 550 RESPONSE W+ ent 550 | L_RESPONSE with event 550 .L_RESPONSE with event 550 L_RESPONSE with event 550 | LRESPONSE with event 550 L_RESPONSE with event 350 .L_RESPONSE with event 559",
+          "parsed": "识别字段：5pyautogui / 0iinc / 1ease / 2Agent / 5cpayload / 3L / 0L",
+          "bond_items": [
+            "5pyautogui",
+            "0iinc",
+            "1ease",
+            "2Agent",
+            "5cpayload",
+            "3L",
+            "0L"
+          ],
+          "bond_summary": "识别字段：5pyautogui / 0iinc / 1ease / 2Agent / 5cpayload / 3L / 0L",
+          "bond_cells": [
+            {
+              "index": 1,
+              "ocr_rows": "pyautogui) (1.0.1) satisfied: pygetwindow>=0.0.5 pyautogui) (0.0.9) tichio",
+              "piece": "5pyautogui",
+              "raw": "pyautogui) (1.0.1) satisfied: pygetwindow>=0.0.5 pyautogui) (0.0.9) tichio"
+            },
+            {
+              "index": 2,
+              "ocr_rows": "ui) (0.1.3) satisfied: CFFI>=1.0i in c:\\us /ice) (2.0.0)",
+              "piece": "0iinc",
+              "raw": "ui) (0.1.3) satisfied: CFFI>=1.0i in c:\\us /ice) (2.0.0)"
+            },
+            {
+              "index": 3,
+              "ocr_rows": "satis+iea: pycparser in c:\\us .0->sounddevice) (2.22) satisfied:pyrect in c:\\users V>=0.0.5->pyautogui) (0.2.0)",
+              "piece": null,
+              "raw": "satis+iea: pycparser in c:\\us .0->sounddevice) (2.22) satisfied:pyrect in c:\\users V>=0.0.5->pyautogui) (0.2.0)"
+            },
+            {
+              "index": 4,
+              "ocr_rows": "satisfied: pyperclip in C: us Fo->pyautogui) (1.11.0) of pip is available: 25.1 ease",
+              "piece": "1ease",
+              "raw": "satisfied: pyperclip in C: us Fo->pyautogui) (1.11.0) of pip is available: 25.1 ease"
+            },
+            {
+              "index": 5,
+              "ocr_rows": "run: python.exe -m pip insta ngdi V2 Agent. rocessDpiAwarenessContext() f otevt DDT ANAREN",
+              "piece": "2Agent",
+              "raw": "run: python.exe -m pip insta ngdi V2 Agent. rocessDpiAwarenessContext() f otevt DDT ANAREN"
+            },
+            {
+              "index": 6,
+              "ocr_rows": "fault using qt.conf Chttps://c 载模型至内存.： Fightboard_mobilenet(MobileNet",
+              "piece": null,
+              "raw": "fault using qt.conf Chttps://c 载模型至内存.： Fightboard_mobilenet(MobileNet"
+            },
+            {
+              "index": 7,
+              "ocr_rows": "ara MobileNet torcn device=pri\\ onnx ocR ort device=cpu |载完毕，系统就绪！",
+              "piece": null,
+              "raw": "ara MobileNet torcn device=pri\\ onnx ocR ort device=cpu |载完毕，系统就绪！"
+            },
+            {
+              "index": 1,
+              "ocr_rows": "Fightboard_mobilenet（MobileNet ard MobileNet torch device=pri\\ onnx OCR ort device=cpu 裁空比 玄统站续！",
+              "piece": null,
+              "raw": "Fightboard_mobilenet（MobileNet ard MobileNet torch device=pri\\ onnx OCR ort device=cpu 裁空比 玄统站续！"
+            },
+            {
+              "index": 2,
+              "ocr_rows": "ction ection {'message_type response 75c payload_msg pay",
+              "piece": "5cpayload",
+              "raw": "ction ection {'message_type response 75c payload_msg pay"
+            },
+            {
+              "index": 3,
+              "ocr_rows": "on ion response {'message_type': d'\",'payload_msg':{'dialog_ic ery",
+              "piece": null,
+              "raw": "on ion response {'message_type': d'\",'payload_msg':{'dialog_ic ery"
+            },
+            {
+              "index": 4,
+              "ocr_rows": "oop L_RESPONSE with event 553 L_RESPONSE with event 550 RESPONSE with event 550",
+              "piece": "3L",
+              "raw": "oop L_RESPONSE with event 553 L_RESPONSE with event 550 RESPONSE with event 550"
+            },
+            {
+              "index": 5,
+              "ocr_rows": "L_RESPONSE with event 550 L_RESPONSE with event 550 L_RESPONSE with event 550 RESPONSE W+ ent 550",
+              "piece": "0L",
+              "raw": "L_RESPONSE with event 550 L_RESPONSE with event 550 L_RESPONSE with event 550 RESPONSE W+ ent 550"
+            },
+            {
+              "index": 6,
+              "ocr_rows": "L_RESPONSE with event 550 .L_RESPONSE with event 550 L_RESPONSE with event 550",
+              "piece": "0L",
+              "raw": "L_RESPONSE with event 550 .L_RESPONSE with event 550 L_RESPONSE with event 550"
+            },
+            {
+              "index": 7,
+              "ocr_rows": "LRESPONSE with event 550 L_RESPONSE with event 350 .L_RESPONSE with event 559",
+              "piece": "0L",
+              "raw": "LRESPONSE with event 550 L_RESPONSE with event 350 .L_RESPONSE with event 559"
+            }
+          ]
+        },
+        "hp_nick": {
+          "name": "血量/昵称",
+          "raw": " |  |  |  |  |  |  | ",
+          "parsed": [
+            "Top1 我 0血",
+            "Top2 我 0血",
+            "Top3 我 0血",
+            "Top4 我 0血",
+            "Top5 我 0血",
+            "Top6 我 0血",
+            "Top7 我 0血",
+            "Top8 我 0血"
+          ],
+          "player_lines": [
+            "Top1 我 0血",
+            "Top2 我 0血",
+            "Top3 我 0血",
+            "Top4 我 0血",
+            "Top5 我 0血",
+            "Top6 我 0血",
+            "Top7 我 0血",
+            "Top8 我 0血"
+          ],
+          "player_cells": [
+            {
+              "display": "Top1 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top2 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top3 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top4 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top5 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top6 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top7 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top8 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            }
+          ]
+        }
+      },
+      "pair_stems": [
+        "01-a",
+        "01-b"
+      ]
+    },
+    "equip_column": {
+      "equip_roi": [
+        10,
+        120,
+        190,
+        920
+      ],
+      "matches": [],
+      "match_count": 0
+    }
+  },
+  "analysis": {
+    "group_traits_merged": {
+      "trait_count_max": {
+        "Agent": 2,
+        "L": 3,
+        "cpayload": 5,
+        "ease": 1,
+        "iinc": 0,
+        "pyautogui": 5
+      },
+      "merged_bonds_one_line": "2Agent / 3L / 5cpayload / 1ease / 0iinc / 5pyautogui"
+    },
+    "cross_validation": {
+      "status": "mismatch_no_editable_bar",
+      "greedy_fix_mode": "low_or_mismatch",
+      "rules_version": "v2_bond_plus_emblem_expected",
+      "trait_loss": 16,
+      "trait_loss_after": 16,
+      "consistent": false,
+      "trait_diff": {
+        "Agent": {
+          "expected": 2,
+          "board": 0,
+          "delta_board_minus_expected": -2
+        },
+        "L": {
+          "expected": 3,
+          "board": 0,
+          "delta_board_minus_expected": -3
+        },
+        "cpayload": {
+          "expected": 5,
+          "board": 0,
+          "delta_board_minus_expected": -5
+        },
+        "ease": {
+          "expected": 1,
+          "board": 0,
+          "delta_board_minus_expected": -1
+        },
+        "pyautogui": {
+          "expected": 5,
+          "board": 0,
+          "delta_board_minus_expected": -5
+        }
+      },
+      "player_traits_from_bonds": {
+        "Agent": 2,
+        "L": 3,
+        "cpayload": 5,
+        "ease": 1,
+        "iinc": 0,
+        "pyautogui": 5
+      },
+      "emblem_bonus_applied_to_expected": {},
+      "player_traits_used": {
+        "L": 3,
+        "cpayload": 5,
+        "ease": 1,
+        "iinc": 0,
+        "Agent": 2,
+        "pyautogui": 5
+      },
+      "board_trait_counts": {},
+      "inference_notes": [
+        "棋盘与羁绊不一致，且当前 greedy_fix_mode 下无可编辑格子（trait_loss==0 时亦不应出现此分支）。"
+      ],
+      "changes": [],
+      "suspect_bar_indices": []
+    }
+  },
+  "confirmed_fightboard_results": []
+}

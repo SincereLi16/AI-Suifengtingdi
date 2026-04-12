@@ -37,7 +37,7 @@ if str(REPO_ROOT) not in sys.path:
 # 与 gemini_v1 一致：加载 .env
 import gemini_v1 as gv  # noqa: E402
 
-DEFAULT_SUMMARY_DIR = REPO_ROOT / "runs" / "battle_pipeline_v3_out"
+DEFAULT_SUMMARY_DIR = REPO_ROOT / "runs" / "duiju_jietu_out"
 
 # (展示名, model id, provider)
 DEFAULT_MODEL_ROWS: List[Tuple[str, str, str]] = [

@@ -1,0 +1,12 @@
+{
+  "img_dir": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\screen",
+  "out_root": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\runs\\battle_pipeline_v3_out",
+  "images": [
+    "01-a.png",
+    "01-b.png"
+  ],
+  "groups": [
+    "01"
+  ],
+  "fightboard_stem_suffix": "a"
+}

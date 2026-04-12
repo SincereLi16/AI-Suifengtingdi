@@ -603,31 +603,21 @@ def _resolve_device(requested: str) -> Tuple[str, Dict[str, bool]]:
     req = (requested or "auto").strip().lower()
     providers = set(ort.get_available_providers())
     has_dml = "DmlExecutionProvider" in providers
-    has_cuda = "CUDAExecutionProvider" in providers
 
     flags = {"det_use_dml": False, "cls_use_dml": False, "rec_use_dml": False}
-    cflags = {"det_use_cuda": False, "cls_use_cuda": False, "rec_use_cuda": False}
 
     if req == "dml":
         if has_dml:
             flags = {k: True for k in flags}
-            return "dml", {**flags, **cflags}
-        return "cpu", {**flags, **cflags}
-    if req == "cuda":
-        if has_cuda:
-            cflags = {k: True for k in cflags}
-            return "cuda", {**flags, **cflags}
-        return "cpu", {**flags, **cflags}
+            return "dml", flags
+        return "cpu", flags
     if req == "cpu":
-        return "cpu", {**flags, **cflags}
+        return "cpu", flags
 
     if has_dml:
         flags = {k: True for k in flags}
-        return "dml", {**flags, **cflags}
-    if has_cuda:
-        cflags = {k: True for k in cflags}
-        return "cuda", {**flags, **cflags}
-    return "cpu", {**flags, **cflags}
+        return "dml", flags
+    return "cpu", flags
 
 
 def _get_thread_ocr(device_kwargs: Dict[str, bool]):
@@ -731,7 +721,7 @@ def _process_pair_group(
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="player_onnx：ONNX Runtime + DML/CUDA/CPU 的玩家信息识别"
+        description="player_onnx：ONNX Runtime + DML/CPU 的玩家信息识别"
     )
     ap.add_argument(
         "input",
@@ -753,9 +743,9 @@ def main() -> None:
     ap.add_argument("--no-clear", action="store_true", help="不清空输出目录（追加写入）")
     ap.add_argument(
         "--device",
-        choices=["auto", "dml", "cuda", "cpu"],
+        choices=["auto", "dml", "cpu"],
         default="auto",
-        help="OCR 设备策略（默认 auto：dml>cuda>cpu）",
+        help="OCR 设备策略（默认 auto：dml>cpu）",
     )
     ap.add_argument(
         "--workers",
@@ -797,7 +787,6 @@ def main() -> None:
     print(f"[player_onnx] device={device_name}, workers={workers}")
 
     device_kwargs["cls_use_dml"] = False
-    device_kwargs["cls_use_cuda"] = False
 
     write_json = not bool(args.no_json)
 

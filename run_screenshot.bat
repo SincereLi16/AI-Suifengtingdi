@@ -1,0 +1,6 @@
+@echo off
+echo Checking and installing required Python packages...
+pip install pyautogui pillow sounddevice websocket-client
+echo Starting Suifengtingdi V2 Agent...
+python "%~dp0pipeline_v2.py"
+pause

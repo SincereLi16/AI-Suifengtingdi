@@ -1,0 +1,321 @@
+{
+  "pipeline": "pipeline",
+  "file": "01-a.png",
+  "group": "01",
+  "annotated_image": "01-a_annotated.png",
+  "star_recog": {
+    "enabled": true,
+    "template_dir": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\星级模板",
+    "scale_ratios": [
+      0.32,
+      0.54,
+      0.76,
+      0.98,
+      1.2,
+      1.42
+    ],
+    "roi_side": 35,
+    "shift_right": 6,
+    "preprocess": "clahe",
+    "ambiguity_margin": 0.12,
+    "upgrade_min_score": 0.0,
+    "elapsed_s": 0.003691699999762932
+  },
+  "modules": {
+    "fightboard": {
+      "file": "01-a.png",
+      "pipeline": "fightboard_mobilenet",
+      "chess_backend": "mobilenet_v3_small",
+      "results": [],
+      "equip_by_bar": {},
+      "star_recog": {
+        "enabled": true,
+        "template_dir": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\星级模板",
+        "scale_ratios": [
+          0.32,
+          0.54,
+          0.76,
+          0.98,
+          1.2,
+          1.42
+        ],
+        "roi_side": 35,
+        "shift_right": 6,
+        "preprocess": "clahe",
+        "ambiguity_margin": 0.12,
+        "upgrade_min_score": 0.0,
+        "elapsed_s": 0.003691699999762932
+      }
+    },
+    "player": {
+      "file": "01-a.png",
+      "mode": "onepass_stitch_ocr_pair_merged",
+      "stitched_image": "01-a_player_stitch.png",
+      "fields": {
+        "phase": {
+          "name": "阶段",
+          "raw": "",
+          "parsed": ""
+        },
+        "level": {
+          "name": "等级",
+          "raw": "",
+          "parsed": ""
+        },
+        "exp": {
+          "name": "经验",
+          "raw": "",
+          "parsed": ""
+        },
+        "gold": {
+          "name": "金币",
+          "raw": "",
+          "parsed": ""
+        },
+        "streak": {
+          "name": "连胜/连败",
+          "raw": "0",
+          "parsed": "无连胜/连败"
+        },
+        "bonds": {
+          "name": "羁绊栏",
+          "raw": "Arduino IDE | N 7 Notion |  | Discord | 7 ic Visual Stud... | 7 Trae | | Arduino IDE | N 7 Notion |  | Discord | 7 ic Visual Stud... | 国 7 Trae |",
+          "parsed": "识别字段：7Notion / 7icVisualStud / 7Trae",
+          "bond_items": [
+            "7Notion",
+            "7icVisualStud",
+            "7Trae"
+          ],
+          "bond_summary": "识别字段：7Notion / 7icVisualStud / 7Trae",
+          "bond_cells": [
+            {
+              "index": 1,
+              "ocr_rows": "Arduino IDE",
+              "piece": null,
+              "raw": "Arduino IDE"
+            },
+            {
+              "index": 2,
+              "ocr_rows": "N 7 Notion",
+              "piece": "7Notion",
+              "raw": "N 7 Notion"
+            },
+            {
+              "index": 3,
+              "ocr_rows": "",
+              "piece": null,
+              "raw": ""
+            },
+            {
+              "index": 4,
+              "ocr_rows": "Discord",
+              "piece": null,
+              "raw": "Discord"
+            },
+            {
+              "index": 5,
+              "ocr_rows": "7 ic Visual Stud...",
+              "piece": "7icVisualStud",
+              "raw": "7 ic Visual Stud..."
+            },
+            {
+              "index": 6,
+              "ocr_rows": "7 Trae",
+              "piece": "7Trae",
+              "raw": "7 Trae"
+            },
+            {
+              "index": 7,
+              "ocr_rows": "",
+              "piece": null,
+              "raw": ""
+            },
+            {
+              "index": 1,
+              "ocr_rows": "Arduino IDE",
+              "piece": null,
+              "raw": "Arduino IDE"
+            },
+            {
+              "index": 2,
+              "ocr_rows": "N 7 Notion",
+              "piece": "7Notion",
+              "raw": "N 7 Notion"
+            },
+            {
+              "index": 3,
+              "ocr_rows": "",
+              "piece": null,
+              "raw": ""
+            },
+            {
+              "index": 4,
+              "ocr_rows": "Discord",
+              "piece": null,
+              "raw": "Discord"
+            },
+            {
+              "index": 5,
+              "ocr_rows": "7 ic Visual Stud...",
+              "piece": "7icVisualStud",
+              "raw": "7 ic Visual Stud..."
+            },
+            {
+              "index": 6,
+              "ocr_rows": "国 7 Trae",
+              "piece": "7Trae",
+              "raw": "国 7 Trae"
+            },
+            {
+              "index": 7,
+              "ocr_rows": "",
+              "piece": null,
+              "raw": ""
+            }
+          ]
+        },
+        "hp_nick": {
+          "name": "血量/昵称",
+          "raw": " |  |  |  |  |  |  | ",
+          "parsed": [
+            "Top1 我 0血",
+            "Top2 我 0血",
+            "Top3 我 0血",
+            "Top4 我 0血",
+            "Top5 三 0血",
+            "Top6 我 0血",
+            "Top7 我 0血",
+            "Top8 我 0血"
+          ],
+          "player_lines": [
+            "Top1 我 0血",
+            "Top2 我 0血",
+            "Top3 我 0血",
+            "Top4 我 0血",
+            "Top5 三 0血",
+            "Top6 我 0血",
+            "Top7 我 0血",
+            "Top8 我 0血"
+          ],
+          "player_cells": [
+            {
+              "display": "Top1 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top2 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top3 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top4 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top5 三 0血",
+              "hp": "0",
+              "id_text": "三",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top6 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top7 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            },
+            {
+              "display": "Top8 我 0血",
+              "hp": "0",
+              "id_text": "我",
+              "ocr_rows": ""
+            }
+          ]
+        }
+      },
+      "pair_stems": [
+        "01-a",
+        "01-b"
+      ]
+    },
+    "equip_column": {
+      "equip_roi": [
+        10,
+        120,
+        190,
+        920
+      ],
+      "matches": [],
+      "match_count": 0
+    }
+  },
+  "analysis": {
+    "group_traits_merged": {
+      "trait_count_max": {
+        "Notion": 7,
+        "Trae": 7,
+        "icVisualStud": 7
+      },
+      "merged_bonds_one_line": "7Notion / 7Trae / 7icVisualStud"
+    },
+    "cross_validation": {
+      "status": "mismatch_no_editable_bar",
+      "greedy_fix_mode": "low_or_mismatch",
+      "rules_version": "v2_bond_plus_emblem_expected",
+      "trait_loss": 21,
+      "trait_loss_after": 21,
+      "consistent": false,
+      "trait_diff": {
+        "Notion": {
+          "expected": 7,
+          "board": 0,
+          "delta_board_minus_expected": -7
+        },
+        "Trae": {
+          "expected": 7,
+          "board": 0,
+          "delta_board_minus_expected": -7
+        },
+        "icVisualStud": {
+          "expected": 7,
+          "board": 0,
+          "delta_board_minus_expected": -7
+        }
+      },
+      "player_traits_from_bonds": {
+        "Notion": 7,
+        "Trae": 7,
+        "icVisualStud": 7
+      },
+      "emblem_bonus_applied_to_expected": {},
+      "player_traits_used": {
+        "icVisualStud": 7,
+        "Notion": 7,
+        "Trae": 7
+      },
+      "board_trait_counts": {},
+      "inference_notes": [
+        "棋盘与羁绊不一致，且当前 greedy_fix_mode 下无可编辑格子（trait_loss==0 时亦不应出现此分支）。"
+      ],
+      "changes": [],
+      "suspect_bar_indices": []
+    }
+  },
+  "confirmed_fightboard_results": []
+}

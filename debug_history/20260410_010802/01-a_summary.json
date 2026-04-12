@@ -1,0 +1,1510 @@
+{
+  "pipeline": "pipeline",
+  "file": "01-a.png",
+  "group": "01",
+  "annotated_image": "01-a_annotated.png",
+  "star_recog": {
+    "enabled": true,
+    "template_dir": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\星级模板",
+    "scale_ratios": [
+      0.32,
+      0.54,
+      0.76,
+      0.98,
+      1.2,
+      1.42
+    ],
+    "roi_side": 35,
+    "shift_right": 6,
+    "preprocess": "clahe",
+    "ambiguity_margin": 0.12,
+    "upgrade_min_score": 0.0,
+    "elapsed_s": 0.010221700002148282
+  },
+  "modules": {
+    "fightboard": {
+      "file": "01-a.png",
+      "pipeline": "fightboard_mobilenet",
+      "chess_backend": "mobilenet_v3_small",
+      "results": [
+        {
+          "bar_index": 1,
+          "bar_box": [
+            1035,
+            357,
+            103,
+            18
+          ],
+          "stage": "stage2",
+          "best": "兰博",
+          "best_score": 2.430854916572571,
+          "second_score": 0.9142047464847565,
+          "gap": 1.5166501700878143,
+          "used_samples": 10,
+          "vote_top": [
+            {
+              "name": "兰博",
+              "votes": 4
+            },
+            {
+              "name": "诺提勒斯",
+              "votes": 2
+            },
+            {
+              "name": "海克斯霸龙",
+              "votes": 1
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "兰博",
+              "score": 2.430854916572571
+            },
+            {
+              "name": "布里茨",
+              "score": 1.7322498261928558
+            },
+            {
+              "name": "诺提勒斯",
+              "score": 0.9142047464847565
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              1086.5,
+              459.92
+            ],
+            "inferred_row_from_y": 1,
+            "cell_row": 1,
+            "cell_col": 4,
+            "label": "第1排第4格",
+            "dist_to_cell_px": 24.06
+          },
+          "star": {
+            "pred": 2,
+            "pred_raw": 2,
+            "pred_score": 0.8345,
+            "second_score": 0.5549,
+            "margin_vs_second": 0.27960000000000007,
+            "scores": {
+              "1": 0.5549,
+              "2": 0.8345,
+              "3": 0.4032
+            },
+            "ambiguity": {
+              "pred_raw": 2,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              1024,
+              349,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 2,
+          "bar_box": [
+            1153,
+            404,
+            106,
+            18
+          ],
+          "stage": "stage2",
+          "best": null,
+          "best_score": 1.4471781253814697,
+          "second_score": 1.2529393136501312,
+          "gap": 0.1942388117313385,
+          "used_samples": 3,
+          "vote_top": [
+            {
+              "name": "可酷伯与悠米",
+              "votes": 2
+            },
+            {
+              "name": "波比",
+              "votes": 1
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "可酷伯与悠米",
+              "score": 1.4471781253814697
+            },
+            {
+              "name": "波比",
+              "score": 1.2529393136501312
+            },
+            {
+              "name": "基兰",
+              "score": 0.2998826205730438
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              1206.0,
+              482.48
+            ],
+            "inferred_row_from_y": 1,
+            "cell_row": 1,
+            "cell_col": 5,
+            "label": "第1排第5格",
+            "dist_to_cell_px": 43.8
+          },
+          "star": {
+            "pred": 1,
+            "pred_raw": 1,
+            "pred_score": 0.5971,
+            "second_score": 0.4012,
+            "margin_vs_second": 0.19589999999999996,
+            "scores": {
+              "1": 0.5971,
+              "2": 0.3935,
+              "3": 0.4012
+            },
+            "ambiguity": {
+              "pred_raw": 1,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              1142,
+              396,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 3,
+          "bar_box": [
+            916,
+            410,
+            103,
+            18
+          ],
+          "stage": "stage2",
+          "best": "佐伊3",
+          "best_score": 1.759354680776596,
+          "second_score": 2.1560524106025696,
+          "gap": -0.3966977298259735,
+          "used_samples": 10,
+          "vote_top": [
+            {
+              "name": "佐伊3",
+              "votes": 4
+            },
+            {
+              "name": "波比",
+              "votes": 4
+            },
+            {
+              "name": "蕾欧娜",
+              "votes": 1
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "凯南",
+              "score": 2.6101948022842407
+            },
+            {
+              "name": "波比",
+              "score": 2.1560524106025696
+            },
+            {
+              "name": "佐伊3",
+              "score": 1.759354680776596
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              967.5,
+              485.36
+            ],
+            "inferred_row_from_y": 1,
+            "cell_row": 1,
+            "cell_col": 3,
+            "label": "第1排第3格",
+            "dist_to_cell_px": 48.04
+          },
+          "star": {
+            "pred": 2,
+            "pred_raw": 2,
+            "pred_score": 0.8083,
+            "second_score": 0.5392,
+            "margin_vs_second": 0.2691,
+            "scores": {
+              "1": 0.5392,
+              "2": 0.8083,
+              "3": 0.3946
+            },
+            "ambiguity": {
+              "pred_raw": 2,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              905,
+              402,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 4,
+          "bar_box": [
+            799,
+            428,
+            106,
+            18
+          ],
+          "stage": "stage2",
+          "best": null,
+          "best_score": 0.87405064702034,
+          "second_score": 0.8080211281776428,
+          "gap": 0.06602951884269714,
+          "used_samples": 3,
+          "vote_top": [
+            {
+              "name": "波比",
+              "votes": 1
+            },
+            {
+              "name": "瑟提",
+              "votes": 1
+            },
+            {
+              "name": "奥瑞利安·索尔",
+              "votes": 1
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "波比",
+              "score": 0.87405064702034
+            },
+            {
+              "name": "瑟提",
+              "score": 0.8080211281776428
+            },
+            {
+              "name": "奥瑞利安·索尔",
+              "score": 0.39372530579566956
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              852.0,
+              494.0
+            ],
+            "inferred_row_from_y": 1,
+            "cell_row": 1,
+            "cell_col": 2,
+            "label": "第1排第2格",
+            "dist_to_cell_px": 55.96
+          },
+          "star": {
+            "pred": 1,
+            "pred_raw": 1,
+            "pred_score": 0.5843,
+            "second_score": 0.3938,
+            "margin_vs_second": 0.19050000000000006,
+            "scores": {
+              "1": 0.5843,
+              "2": 0.3938,
+              "3": 0.2947
+            },
+            "ambiguity": {
+              "pred_raw": 1,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              788,
+              420,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 5,
+          "bar_box": [
+            699,
+            653,
+            103,
+            18
+          ],
+          "stage": "stage2",
+          "best": "辛吉德",
+          "best_score": 1.4577824771404266,
+          "second_score": 1.0438397824764252,
+          "gap": 0.41394269466400146,
+          "used_samples": 9,
+          "vote_top": [
+            {
+              "name": "辛吉德",
+              "votes": 3
+            },
+            {
+              "name": "塔姆",
+              "votes": 2
+            },
+            {
+              "name": "亚索",
+              "votes": 1
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "辛吉德",
+              "score": 1.4577824771404266
+            },
+            {
+              "name": "塔姆",
+              "score": 1.0438397824764252
+            },
+            {
+              "name": "波比",
+              "score": 0.9876875579357147
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              750.5,
+              719.0
+            ],
+            "inferred_row_from_y": 4,
+            "cell_row": 4,
+            "cell_col": 1,
+            "label": "第4排第1格",
+            "dist_to_cell_px": 28.66
+          },
+          "star": {
+            "pred": 2,
+            "pred_raw": 2,
+            "pred_score": 0.7433,
+            "second_score": 0.5458,
+            "margin_vs_second": 0.1975,
+            "scores": {
+              "1": 0.5458,
+              "2": 0.7433,
+              "3": 0.3362
+            },
+            "ambiguity": {
+              "pred_raw": 2,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              688,
+              645,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 6,
+          "bar_box": [
+            1508,
+            670,
+            105,
+            18
+          ],
+          "stage": "stage2",
+          "best": null,
+          "best_score": 0.5586586594581604,
+          "second_score": 0.4413413405418396,
+          "gap": 0.1173173189163208,
+          "used_samples": 1,
+          "vote_top": [
+            {
+              "name": "雷克塞",
+              "votes": 1
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "雷克塞",
+              "score": 0.5586586594581604
+            },
+            {
+              "name": "诺提勒斯",
+              "score": 0.4413413405418396
+            }
+          ],
+          "confidence": "medium",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              1560.5,
+              736.0
+            ],
+            "inferred_row_from_y": 4,
+            "cell_row": 4,
+            "cell_col": 7,
+            "label": "第4排第7格",
+            "dist_to_cell_px": 11.24
+          },
+          "star": {
+            "pred": 2,
+            "pred_raw": 2,
+            "pred_score": 0.7009,
+            "second_score": 0.5536,
+            "margin_vs_second": 0.1473,
+            "scores": {
+              "1": 0.5536,
+              "2": 0.7009,
+              "3": 0.3291
+            },
+            "ambiguity": {
+              "pred_raw": 2,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              1497,
+              662,
+              35,
+              35
+            ]
+          }
+        },
+        {
+          "bar_index": 7,
+          "bar_box": [
+            834,
+            678,
+            106,
+            18
+          ],
+          "stage": "stage1",
+          "best": "璐璐",
+          "best_score": 1.8471817076206207,
+          "second_score": 0.9014385938644409,
+          "gap": 0.9457431137561798,
+          "used_samples": 4,
+          "vote_top": [
+            {
+              "name": "璐璐",
+              "votes": 4
+            }
+          ],
+          "agg_top": [
+            {
+              "name": "璐璐",
+              "score": 1.8471817076206207
+            },
+            {
+              "name": "凯南",
+              "score": 0.9014385938644409
+            },
+            {
+              "name": "佐伊3",
+              "score": 0.38945019245147705
+            }
+          ],
+          "confidence": "high",
+          "position": {
+            "anchor_mode": "bar",
+            "anchor_xy": [
+              887.0,
+              744.0
+            ],
+            "inferred_row_from_y": 4,
+            "cell_row": 4,
+            "cell_col": 2,
+            "label": "第4排第2格",
+            "dist_to_cell_px": 13.6
+          },
+          "star": {
+            "pred": 1,
+            "pred_raw": 1,
+            "pred_score": 0.5795,
+            "second_score": 0.3002,
+            "margin_vs_second": 0.2793,
+            "scores": {
+              "1": 0.5795,
+              "2": 0.2894,
+              "3": 0.3002
+            },
+            "ambiguity": {
+              "pred_raw": 1,
+              "upgrades": []
+            },
+            "star_roi_rect_xywh": [
+              823,
+              670,
+              35,
+              35
+            ]
+          }
+        }
+      ],
+      "equip_by_bar": {
+        "1": [
+          {
+            "name": "离子火花",
+            "score": 0.9044244289398193,
+            "gx1": 1079,
+            "gy1": 381,
+            "side": 25,
+            "rank": 1
+          },
+          {
+            "name": "狂徒铠甲",
+            "score": 0.8832550644874573,
+            "gx1": 1047,
+            "gy1": 382,
+            "side": 24,
+            "rank": 2
+          }
+        ],
+        "2": [],
+        "3": [],
+        "4": [],
+        "5": [],
+        "6": [],
+        "7": []
+      },
+      "star_recog": {
+        "enabled": true,
+        "template_dir": "C:\\Users\\Administrator\\Desktop\\随风听笛6\\星级模板",
+        "scale_ratios": [
+          0.32,
+          0.54,
+          0.76,
+          0.98,
+          1.2,
+          1.42
+        ],
+        "roi_side": 35,
+        "shift_right": 6,
+        "preprocess": "clahe",
+        "ambiguity_margin": 0.12,
+        "upgrade_min_score": 0.0,
+        "elapsed_s": 0.010221700002148282
+      }
+    },
+    "player": {
+      "file": "01-a.png",
+      "mode": "onepass_stitch_ocr_pair_merged",
+      "stitched_image": "01-a_player_stitch.png",
+      "fields": {
+        "phase": {
+          "name": "阶段",
+          "raw": "& 3-6",
+          "parsed": "&3-6"
+        },
+        "level": {
+          "name": "等级",
+          "raw": "7级",
+          "parsed": "7级"
+        },
+        "exp": {
+          "name": "经验",
+          "raw": "6/60",
+          "parsed": "6/60"
+        },
+        "gold": {
+          "name": "金币",
+          "raw": "69",
+          "parsed": "69"
+        },
+        "streak": {
+          "name": "连胜/连败",
+          "raw": "5",
+          "parsed": "连胜5"
+        },
+        "bonds": {
+          "name": "羁绊栏",
+          "raw": "约德尔人 ? 2/4/6/8 | 护卫 2 随风听..4/-6 口 | 法师 福 2 7开始截图任务 2 | 虚空 1/2 | 主宰 1/2 CRR | 无职 枪手 1/2 | 士 1/2 | 约德尔人 2/4/6/8 | 护卫 2 2/4/6 | 法师 2 2/4/6 | 虚空 1/2 | 主宰 1/2 C | 元职 枪手 1/2 | 斗士 1/2",
+          "parsed": "识别字段：2约德尔人 / 2随风听 / 7开始截图任务 / 1虚空 / 1主宰 / 1枪手 / 1斗士 / 2护卫 / 2法师",
+          "bond_items": [
+            "2约德尔人",
+            "2随风听",
+            "7开始截图任务",
+            "1虚空",
+            "1主宰",
+            "1枪手",
+            "1斗士",
+            "2护卫",
+            "2法师"
+          ],
+          "bond_summary": "识别字段：2约德尔人 / 2随风听 / 7开始截图任务 / 1虚空 / 1主宰 / 1枪手 / 1斗士 / 2护卫 / 2法师",
+          "bond_cells": [
+            {
+              "index": 1,
+              "ocr_rows": "约德尔人 ? 2/4/6/8",
+              "piece": "2约德尔人",
+              "raw": "约德尔人 ? 2/4/6/8"
+            },
+            {
+              "index": 2,
+              "ocr_rows": "护卫 2 随风听..4/-6 口",
+              "piece": "2随风听",
+              "raw": "护卫 2 随风听..4/-6 口"
+            },
+            {
+              "index": 3,
+              "ocr_rows": "法师 福 2 7开始截图任务 2",
+              "piece": "7开始截图任务",
+              "raw": "法师 福 2 7开始截图任务 2"
+            },
+            {
+              "index": 4,
+              "ocr_rows": "虚空 1/2",
+              "piece": "1虚空",
+              "raw": "虚空 1/2"
+            },
+            {
+              "index": 5,
+              "ocr_rows": "主宰 1/2 CRR",
+              "piece": "1主宰",
+              "raw": "主宰 1/2 CRR"
+            },
+            {
+              "index": 6,
+              "ocr_rows": "无职 枪手 1/2",
+              "piece": "1枪手",
+              "raw": "无职 枪手 1/2"
+            },
+            {
+              "index": 7,
+              "ocr_rows": "士 1/2",
+              "piece": "1斗士",
+              "raw": "士 1/2"
+            },
+            {
+              "index": 1,
+              "ocr_rows": "约德尔人 2/4/6/8",
+              "piece": "2约德尔人",
+              "raw": "约德尔人 2/4/6/8"
+            },
+            {
+              "index": 2,
+              "ocr_rows": "护卫 2 2/4/6",
+              "piece": "2护卫",
+              "raw": "护卫 2 2/4/6"
+            },
+            {
+              "index": 3,
+              "ocr_rows": "法师 2 2/4/6",
+              "piece": "2法师",
+              "raw": "法师 2 2/4/6"
+            },
+            {
+              "index": 4,
+              "ocr_rows": "虚空 1/2",
+              "piece": "1虚空",
+              "raw": "虚空 1/2"
+            },
+            {
+              "index": 5,
+              "ocr_rows": "主宰 1/2 C",
+              "piece": "1主宰",
+              "raw": "主宰 1/2 C"
+            },
+            {
+              "index": 6,
+              "ocr_rows": "元职 枪手 1/2",
+              "piece": "1枪手",
+              "raw": "元职 枪手 1/2"
+            },
+            {
+              "index": 7,
+              "ocr_rows": "斗士 1/2",
+              "piece": "1斗士",
+              "raw": "斗士 1/2"
+            }
+          ]
+        },
+        "hp_nick": {
+          "name": "血量/昵称",
+          "raw": "90 | 90 | 81 | 64 | 58 | 44 | 25 | ",
+          "parsed": [
+            "Top1 暗影岛之驴 90血",
+            "Top2 我 90血",
+            "Top3 布隆小法加冰 81血",
+            "Top4 首相老铁 64血",
+            "Top5 肥胖的石头人 58血",
+            "Top6 棘背蓝的假装 44血",
+            "Top7 O赏金猎人的手指 25血",
+            "Top8 忍猫之影夜行 0血"
+          ],
+          "player_lines": [
+            "Top1 暗影岛之驴 90血",
+            "Top2 我 90血",
+            "Top3 布隆小法加冰 81血",
+            "Top4 首相老铁 64血",
+            "Top5 肥胖的石头人 58血",
+            "Top6 棘背蓝的假装 44血",
+            "Top7 O赏金猎人的手指 25血",
+            "Top8 忍猫之影夜行 0血"
+          ],
+          "player_cells": [
+            {
+              "display": "Top1 暗影岛之驴 90血",
+              "hp": "90",
+              "id_text": "暗影岛之驴",
+              "ocr_rows": "90"
+            },
+            {
+              "display": "Top2 我 90血",
+              "hp": "90",
+              "id_text": "我",
+              "ocr_rows": "90"
+            },
+            {
+              "display": "Top3 布隆小法加冰 81血",
+              "hp": "81",
+              "id_text": "布隆小法加冰",
+              "ocr_rows": "81"
+            },
+            {
+              "display": "Top4 首相老铁 64血",
+              "hp": "64",
+              "id_text": "首相老铁",
+              "ocr_rows": "64"
+            },
+            {
+              "display": "Top5 肥胖的石头人 58血",
+              "hp": "58",
+              "id_text": "肥胖的石头人",
+              "ocr_rows": "58"
+            },
+            {
+              "display": "Top6 棘背蓝的假装 44血",
+              "hp": "44",
+              "id_text": "棘背蓝的假装",
+              "ocr_rows": "44"
+            },
+            {
+              "display": "Top7 O赏金猎人的手指 25血",
+              "hp": "25",
+              "id_text": "O赏金猎人的手指",
+              "ocr_rows": "25"
+            },
+            {
+              "display": "Top8 忍猫之影夜行 0血",
+              "hp": "0",
+              "id_text": "忍猫之影夜行",
+              "ocr_rows": ""
+            }
+          ]
+        }
+      },
+      "pair_stems": [
+        "01-a",
+        "01-b"
+      ]
+    },
+    "equip_column": {
+      "equip_roi": [
+        10,
+        120,
+        190,
+        920
+      ],
+      "matches": [
+        {
+          "template_file": "无用大棒.png",
+          "name_stem": "无用大棒",
+          "score": 0.9553676247596741,
+          "global_x": 26,
+          "global_y": 210,
+          "side": 61,
+          "roi_index": 3,
+          "rank_in_block": 1
+        },
+        {
+          "template_file": "反曲之弓.png",
+          "name_stem": "反曲之弓",
+          "score": 0.9700077176094055,
+          "global_x": 26,
+          "global_y": 289,
+          "side": 61,
+          "roi_index": 5,
+          "rank_in_block": 1
+        },
+        {
+          "template_file": "拳套.png",
+          "name_stem": "拳套",
+          "score": 0.9620053768157959,
+          "global_x": 26,
+          "global_y": 369,
+          "side": 61,
+          "roi_index": 7,
+          "rank_in_block": 1
+        },
+        {
+          "template_file": "巨人腰带.png",
+          "name_stem": "巨人腰带",
+          "score": 0.9350491762161255,
+          "global_x": 26,
+          "global_y": 448,
+          "side": 61,
+          "roi_index": 9,
+          "rank_in_block": 1
+        }
+      ],
+      "match_count": 4
+    }
+  },
+  "analysis": {
+    "group_traits_merged": {
+      "trait_count_max": {
+        "主宰": 1,
+        "开始截图任务": 7,
+        "护卫": 2,
+        "斗士": 1,
+        "枪手": 1,
+        "法师": 2,
+        "约德尔人": 2,
+        "虚空": 1,
+        "随风听": 2
+      },
+      "merged_bonds_one_line": "1主宰 / 7开始截图任务 / 2护卫 / 1斗士 / 1枪手 / 2法师 / 2约德尔人 / 1虚空 / 2随风听"
+    },
+    "cross_validation": {
+      "status": "mismatch_inferred",
+      "greedy_fix_mode": "low_or_mismatch",
+      "rules_version": "v2_bond_plus_emblem_expected",
+      "trait_loss": 15,
+      "trait_loss_after": 15,
+      "consistent": false,
+      "trait_diff": {
+        "开始截图任务": {
+          "expected": 7,
+          "board": 0,
+          "delta_board_minus_expected": -7
+        },
+        "护卫": {
+          "expected": 2,
+          "board": 1,
+          "delta_board_minus_expected": -1
+        },
+        "斗士": {
+          "expected": 1,
+          "board": 0,
+          "delta_board_minus_expected": -1
+        },
+        "枪手": {
+          "expected": 1,
+          "board": 0,
+          "delta_board_minus_expected": -1
+        },
+        "法师": {
+          "expected": 2,
+          "board": 1,
+          "delta_board_minus_expected": -1
+        },
+        "祖安": {
+          "expected": 0,
+          "board": 1,
+          "delta_board_minus_expected": 1
+        },
+        "虚空": {
+          "expected": 1,
+          "board": 0,
+          "delta_board_minus_expected": -1
+        },
+        "随风听": {
+          "expected": 2,
+          "board": 0,
+          "delta_board_minus_expected": -2
+        }
+      },
+      "player_traits_from_bonds": {
+        "主宰": 1,
+        "开始截图任务": 7,
+        "护卫": 2,
+        "斗士": 1,
+        "枪手": 1,
+        "法师": 2,
+        "约德尔人": 2,
+        "虚空": 1,
+        "随风听": 2
+      },
+      "emblem_bonus_applied_to_expected": {},
+      "player_traits_used": {
+        "斗士": 1,
+        "虚空": 1,
+        "护卫": 2,
+        "枪手": 1,
+        "主宰": 1,
+        "法师": 2,
+        "随风听": 2,
+        "约德尔人": 2,
+        "开始截图任务": 7
+      },
+      "board_trait_counts": {
+        "护卫": 1,
+        "约德尔人": 2,
+        "主宰": 1,
+        "祖安": 1,
+        "法师": 1
+      },
+      "inference_notes": [
+        "贪心 bar#2 第1排第5格 : 「」→「峡谷先锋」（trait_loss 15→13）",
+        "贪心 bar#3 第1排第3格 : 「佐伊3」→「妮蔻」（trait_loss 13→12）"
+      ],
+      "changes": [
+        {
+          "bar_index": 2,
+          "position_label": "第1排第5格",
+          "from": "",
+          "to": "峡谷先锋",
+          "confidence": "high",
+          "trait_loss_before": 15,
+          "trait_loss_after": 13
+        },
+        {
+          "bar_index": 3,
+          "position_label": "第1排第3格",
+          "from": "佐伊3",
+          "to": "妮蔻",
+          "confidence": "high",
+          "trait_loss_before": 13,
+          "trait_loss_after": 12
+        }
+      ],
+      "suspect_bar_indices": []
+    }
+  },
+  "confirmed_fightboard_results": [
+    {
+      "bar_index": 1,
+      "bar_box": [
+        1035,
+        357,
+        103,
+        18
+      ],
+      "stage": "stage2",
+      "best": "兰博",
+      "best_score": 2.430854916572571,
+      "second_score": 0.9142047464847565,
+      "gap": 1.5166501700878143,
+      "used_samples": 10,
+      "vote_top": [
+        {
+          "name": "兰博",
+          "votes": 4
+        },
+        {
+          "name": "诺提勒斯",
+          "votes": 2
+        },
+        {
+          "name": "海克斯霸龙",
+          "votes": 1
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "兰博",
+          "score": 2.430854916572571
+        },
+        {
+          "name": "布里茨",
+          "score": 1.7322498261928558
+        },
+        {
+          "name": "诺提勒斯",
+          "score": 0.9142047464847565
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          1086.5,
+          459.92
+        ],
+        "inferred_row_from_y": 1,
+        "cell_row": 1,
+        "cell_col": 4,
+        "label": "第1排第4格",
+        "dist_to_cell_px": 24.06
+      },
+      "star": {
+        "pred": 2,
+        "pred_raw": 2,
+        "pred_score": 0.8345,
+        "second_score": 0.5549,
+        "margin_vs_second": 0.27960000000000007,
+        "scores": {
+          "1": 0.5549,
+          "2": 0.8345,
+          "3": 0.4032
+        },
+        "ambiguity": {
+          "pred_raw": 2,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          1024,
+          349,
+          35,
+          35
+        ]
+      }
+    },
+    {
+      "bar_index": 2,
+      "bar_box": [
+        1153,
+        404,
+        106,
+        18
+      ],
+      "stage": "stage2",
+      "best": "峡谷先锋",
+      "best_score": 1.4471781253814697,
+      "second_score": 1.2529393136501312,
+      "gap": 0.1942388117313385,
+      "used_samples": 3,
+      "vote_top": [
+        {
+          "name": "可酷伯与悠米",
+          "votes": 2
+        },
+        {
+          "name": "波比",
+          "votes": 1
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "可酷伯与悠米",
+          "score": 1.4471781253814697
+        },
+        {
+          "name": "波比",
+          "score": 1.2529393136501312
+        },
+        {
+          "name": "基兰",
+          "score": 0.2998826205730438
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          1206.0,
+          482.48
+        ],
+        "inferred_row_from_y": 1,
+        "cell_row": 1,
+        "cell_col": 5,
+        "label": "第1排第5格",
+        "dist_to_cell_px": 43.8
+      },
+      "star": {
+        "pred": 1,
+        "pred_raw": 1,
+        "pred_score": 0.5971,
+        "second_score": 0.4012,
+        "margin_vs_second": 0.19589999999999996,
+        "scores": {
+          "1": 0.5971,
+          "2": 0.3935,
+          "3": 0.4012
+        },
+        "ambiguity": {
+          "pred_raw": 1,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          1142,
+          396,
+          35,
+          35
+        ]
+      },
+      "trait_cv_corrected": true
+    },
+    {
+      "bar_index": 3,
+      "bar_box": [
+        916,
+        410,
+        103,
+        18
+      ],
+      "stage": "stage2",
+      "best": "妮蔻",
+      "best_score": 1.759354680776596,
+      "second_score": 2.1560524106025696,
+      "gap": -0.3966977298259735,
+      "used_samples": 10,
+      "vote_top": [
+        {
+          "name": "佐伊3",
+          "votes": 4
+        },
+        {
+          "name": "波比",
+          "votes": 4
+        },
+        {
+          "name": "蕾欧娜",
+          "votes": 1
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "凯南",
+          "score": 2.6101948022842407
+        },
+        {
+          "name": "波比",
+          "score": 2.1560524106025696
+        },
+        {
+          "name": "佐伊3",
+          "score": 1.759354680776596
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          967.5,
+          485.36
+        ],
+        "inferred_row_from_y": 1,
+        "cell_row": 1,
+        "cell_col": 3,
+        "label": "第1排第3格",
+        "dist_to_cell_px": 48.04
+      },
+      "star": {
+        "pred": 2,
+        "pred_raw": 2,
+        "pred_score": 0.8083,
+        "second_score": 0.5392,
+        "margin_vs_second": 0.2691,
+        "scores": {
+          "1": 0.5392,
+          "2": 0.8083,
+          "3": 0.3946
+        },
+        "ambiguity": {
+          "pred_raw": 2,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          905,
+          402,
+          35,
+          35
+        ]
+      },
+      "trait_cv_corrected": true
+    },
+    {
+      "bar_index": 4,
+      "bar_box": [
+        799,
+        428,
+        106,
+        18
+      ],
+      "stage": "stage2",
+      "best": null,
+      "best_score": 0.87405064702034,
+      "second_score": 0.8080211281776428,
+      "gap": 0.06602951884269714,
+      "used_samples": 3,
+      "vote_top": [
+        {
+          "name": "波比",
+          "votes": 1
+        },
+        {
+          "name": "瑟提",
+          "votes": 1
+        },
+        {
+          "name": "奥瑞利安·索尔",
+          "votes": 1
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "波比",
+          "score": 0.87405064702034
+        },
+        {
+          "name": "瑟提",
+          "score": 0.8080211281776428
+        },
+        {
+          "name": "奥瑞利安·索尔",
+          "score": 0.39372530579566956
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          852.0,
+          494.0
+        ],
+        "inferred_row_from_y": 1,
+        "cell_row": 1,
+        "cell_col": 2,
+        "label": "第1排第2格",
+        "dist_to_cell_px": 55.96
+      },
+      "star": {
+        "pred": 1,
+        "pred_raw": 1,
+        "pred_score": 0.5843,
+        "second_score": 0.3938,
+        "margin_vs_second": 0.19050000000000006,
+        "scores": {
+          "1": 0.5843,
+          "2": 0.3938,
+          "3": 0.2947
+        },
+        "ambiguity": {
+          "pred_raw": 1,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          788,
+          420,
+          35,
+          35
+        ]
+      }
+    },
+    {
+      "bar_index": 5,
+      "bar_box": [
+        699,
+        653,
+        103,
+        18
+      ],
+      "stage": "stage2",
+      "best": "辛吉德",
+      "best_score": 1.4577824771404266,
+      "second_score": 1.0438397824764252,
+      "gap": 0.41394269466400146,
+      "used_samples": 9,
+      "vote_top": [
+        {
+          "name": "辛吉德",
+          "votes": 3
+        },
+        {
+          "name": "塔姆",
+          "votes": 2
+        },
+        {
+          "name": "亚索",
+          "votes": 1
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "辛吉德",
+          "score": 1.4577824771404266
+        },
+        {
+          "name": "塔姆",
+          "score": 1.0438397824764252
+        },
+        {
+          "name": "波比",
+          "score": 0.9876875579357147
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          750.5,
+          719.0
+        ],
+        "inferred_row_from_y": 4,
+        "cell_row": 4,
+        "cell_col": 1,
+        "label": "第4排第1格",
+        "dist_to_cell_px": 28.66
+      },
+      "star": {
+        "pred": 2,
+        "pred_raw": 2,
+        "pred_score": 0.7433,
+        "second_score": 0.5458,
+        "margin_vs_second": 0.1975,
+        "scores": {
+          "1": 0.5458,
+          "2": 0.7433,
+          "3": 0.3362
+        },
+        "ambiguity": {
+          "pred_raw": 2,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          688,
+          645,
+          35,
+          35
+        ]
+      }
+    },
+    {
+      "bar_index": 6,
+      "bar_box": [
+        1508,
+        670,
+        105,
+        18
+      ],
+      "stage": "stage2",
+      "best": null,
+      "best_score": 0.5586586594581604,
+      "second_score": 0.4413413405418396,
+      "gap": 0.1173173189163208,
+      "used_samples": 1,
+      "vote_top": [
+        {
+          "name": "雷克塞",
+          "votes": 1
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "雷克塞",
+          "score": 0.5586586594581604
+        },
+        {
+          "name": "诺提勒斯",
+          "score": 0.4413413405418396
+        }
+      ],
+      "confidence": "medium",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          1560.5,
+          736.0
+        ],
+        "inferred_row_from_y": 4,
+        "cell_row": 4,
+        "cell_col": 7,
+        "label": "第4排第7格",
+        "dist_to_cell_px": 11.24
+      },
+      "star": {
+        "pred": 2,
+        "pred_raw": 2,
+        "pred_score": 0.7009,
+        "second_score": 0.5536,
+        "margin_vs_second": 0.1473,
+        "scores": {
+          "1": 0.5536,
+          "2": 0.7009,
+          "3": 0.3291
+        },
+        "ambiguity": {
+          "pred_raw": 2,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          1497,
+          662,
+          35,
+          35
+        ]
+      }
+    },
+    {
+      "bar_index": 7,
+      "bar_box": [
+        834,
+        678,
+        106,
+        18
+      ],
+      "stage": "stage1",
+      "best": "璐璐",
+      "best_score": 1.8471817076206207,
+      "second_score": 0.9014385938644409,
+      "gap": 0.9457431137561798,
+      "used_samples": 4,
+      "vote_top": [
+        {
+          "name": "璐璐",
+          "votes": 4
+        }
+      ],
+      "agg_top": [
+        {
+          "name": "璐璐",
+          "score": 1.8471817076206207
+        },
+        {
+          "name": "凯南",
+          "score": 0.9014385938644409
+        },
+        {
+          "name": "佐伊3",
+          "score": 0.38945019245147705
+        }
+      ],
+      "confidence": "high",
+      "position": {
+        "anchor_mode": "bar",
+        "anchor_xy": [
+          887.0,
+          744.0
+        ],
+        "inferred_row_from_y": 4,
+        "cell_row": 4,
+        "cell_col": 2,
+        "label": "第4排第2格",
+        "dist_to_cell_px": 13.6
+      },
+      "star": {
+        "pred": 1,
+        "pred_raw": 1,
+        "pred_score": 0.5795,
+        "second_score": 0.3002,
+        "margin_vs_second": 0.2793,
+        "scores": {
+          "1": 0.5795,
+          "2": 0.2894,
+          "3": 0.3002
+        },
+        "ambiguity": {
+          "pred_raw": 1,
+          "upgrades": []
+        },
+        "star_roi_rect_xywh": [
+          823,
+          670,
+          35,
+          35
+        ]
+      }
+    }
+  ]
+}

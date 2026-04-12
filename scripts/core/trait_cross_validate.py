@@ -1283,6 +1283,28 @@ def _greedy_fix_with_editable_indices(
                 if l < best_l:
                     best_l = l
                     best_cand = cand
+            
+            # 引入全局补全逻辑：如果只看候选名单无法将 loss 降到 0，且当前格子是 fix_idx
+            # 我们尝试从全英雄库（chess.keys()）中暴力搜索能让 loss 进一步降低（甚至归零）的英雄
+            if best_l > 0:
+                # 寻找当前缺失的羁绊（期望 > 棋盘实际）
+                cur_board_traits = _trait_counts_from_board(names, out, eb, chess, equip_grants)
+                missing_traits = {t: expected[t] - cur_board_traits.get(t, 0) for t in expected if expected[t] > cur_board_traits.get(t, 0)}
+                
+                if missing_traits:
+                    # 遍历全图鉴，看看谁能提供这些缺失的羁绊
+                    for global_cand, cand_traits in chess.items():
+                        # 启发式剪枝：如果这个英雄不包含任何缺失的羁绊，直接跳过
+                        if not any(t in missing_traits for t in cand_traits):
+                            continue
+                        
+                        trial = names.copy()
+                        trial[i] = global_cand
+                        l = _trait_loss(expected, _trait_counts_from_board(trial, out, eb, chess, equip_grants))
+                        if l < best_l:
+                            best_l = l
+                            best_cand = global_cand
+
             if best_cand != names[i] and best_l < loss_cur:
                 pos_lbl = ""
                 po = r.get("position") if isinstance(r.get("position"), dict) else {}
